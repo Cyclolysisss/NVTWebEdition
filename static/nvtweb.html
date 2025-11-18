@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TBM + TransGironde - Live Transit Network Map</title>
+    
+    <!-- Mapbox GL JS -->
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.17.0-beta.1/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.17.0-beta.1/mapbox-gl.js"></script>
+    
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideInUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        @keyframes backgroundGradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden;
+            background: linear-gradient(-45deg, #0f0c29, #302b63, #24243e);
+            background-size: 400% 400%;
+            animation: backgroundGradient 15s ease infinite;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+            animation: fadeIn 1s ease-in-out;
+        }
+
+        .map-overlay {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37), 0 0 1px rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1.5px solid rgba(255, 255, 255, 0.18);
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+            will-change: transform, opacity;
+        }
+        
+        .map-overlay::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .map-overlay::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+
+        .map-overlay::-webkit-scrollbar-thumb {
+            background: linear-gradient(45deg, #007cbf, #005a8c);
+            border-radius: 10px;
+            border: 2px solid transparent;
+            background-clip: content-box;
+        }
+
+        .map-overlay::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(45deg, #005a8c, #007cbf);
+        }
+
+        .legend {
+            top: 10px;
+            right: 10px;
+            width: 340px;
+            animation: slideInUp 0.5s 0.2s ease-out forwards;
+            opacity: 0;
+        }
+
+        .controls {
+            top: 10px;
+            left: 10px;
+            width: 300px;
+            animation: slideInUp 0.5s ease-out forwards;
+            opacity: 0;
+        }
+
+        .info-panel {
+            bottom: 10px;
+            left: 10px;
+            width: 380px;
+            max-height: 450px;
+            animation: slideInUp 0.5s 0.4s ease-out forwards;
+            opacity: 0;
+        }
+
+        .directions-panel {
+            bottom: 10px;
+            right: 10px;
+            width: 420px;
+            max-height: calc(100vh - 40px);
+            display: none;
+            animation: slideInUp 0.5s 0.3s ease-out forwards;
+        }
+
+        h3 {
+            margin-bottom: 16px;
+            color: #1a1a2e;
+            font-size: 20px;
+            font-weight: 700;
+            border-bottom: 2px solid;
+            border-image: linear-gradient(to right, #007cbf, #764ba2) 1;
+            padding-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .line-group {
+            margin-bottom: 12px;
+            border: none;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+        }
+
+        .line-group:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+        }
+
+        .line-group-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 14px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
+            transition: background 0.3s;
+            font-weight: 600;
+        }
+
+        .line-group-header:hover {
+            background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+        }
+        
+        .line-group-header.tram { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+        .line-group-header.brt { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }
+        .line-group-header.bus { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .line-group-header.transgironde { background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%); }
+        .line-group-header.school { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); }
+        .line-group-header.night { background: linear-gradient(135deg, #30cfd0 0%, #330867 100%); }
+        .line-group-header.ferry { background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); }
+        
+        .line-group-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 15px;
+        }
+
+        .line-group-count {
+            background: rgba(255, 255, 255, 0.25);
+            padding: 4px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .line-group-toggle {
+            font-size: 18px;
+            transition: transform 0.4s cubic-bezier(0.25, 0.1, 0.25, 1);
+        }
+
+        .line-group-toggle.collapsed {
+            transform: rotate(-90deg);
+        }
+
+        .line-group-content {
+            background: #ffffff;
+            max-height: 600px;
+            overflow-y: auto;
+            transition: max-height 0.4s ease-in-out, opacity 0.3s ease-in-out;
+            opacity: 1;
+        }
+
+        .line-group-content.collapsed {
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+        }
+
+        .line-group-actions {
+            padding: 10px;
+            background: #f7f8fc;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            gap: 8px;
+        }
+
+        .group-action-btn {
+            flex: 1;
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 600;
+            background: white;
+            border: 1px solid #ced4da;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            color: #495057;
+        }
+
+        .group-action-btn:hover {
+            background: #007cbf;
+            color: white;
+            border-color: #007cbf;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 124, 191, 0.4);
+        }
+
+        .line-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 14px;
+            cursor: pointer;
+            transition: transform 0.2s ease, background-color 0.2s ease;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .line-item:last-child { border-bottom: none; }
+
+        .line-item:hover {
+            background-color: #f8f9fa;
+            transform: translateX(5px);
+        }
+
+        .line-item.selected {
+            background: linear-gradient(90deg, #e3f2fd, #ffffff);
+            border-left: 5px solid #007cbf;
+            font-weight: 600;
+            transform: translateX(0);
+        }
+        
+        .line-badge {
+            min-width: 44px;
+            height: 30px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: white;
+            margin-right: 14px;
+            font-size: 14px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .line-item:hover .line-badge {
+            transform: scale(1.08);
+            box-shadow: 0 6px 15px rgba(0, 0, 0, 0.25);
+        }
+
+        .line-info { flex: 1; font-size: 13px; }
+        .line-name { font-weight: 600; color: #212529; font-size: 14px; margin-bottom: 5px; }
+        .line-meta { display: flex; gap: 12px; font-size: 11px; color: #6c757d; flex-wrap: wrap; }
+        .vehicle-count, .shape-count { display: flex; align-items: center; gap: 5px; background: #f1f3f5; padding: 3px 8px; border-radius: 6px; }
+
+        .operator-badge {
+            background: #007cbf;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            box-shadow: 0 2px 6px rgba(0, 124, 191, 0.4);
+        }
+
+        .operator-badge.transgironde {
+            background: #ff6b35;
+            box-shadow: 0 2px 6px rgba(255, 107, 53, 0.4);
+        }
+
+        .alert-badge {
+            background: #dc3545;
+            color: white;
+            padding: 3px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            box-shadow: 0 2px 6px rgba(220, 53, 69, 0.4);
+        }
+
+        .filter-group { margin-bottom: 16px; }
+        .filter-group label { display: block; margin-bottom: 8px; font-weight: 600; color: #495057; font-size: 14px; }
+        
+        .checkbox-group { display: flex; flex-direction: column; gap: 12px; background: rgba(248, 249, 250, 0.8); padding: 14px; border-radius: 10px; }
+        .checkbox-item { display: flex; align-items: center; font-size: 14px; color: #343a40; cursor: pointer; transition: color 0.2s; }
+        .checkbox-item:hover { color: #007cbf; }
+        .checkbox-item input[type="checkbox"] { margin-right: 12px; width: 18px; height: 18px; cursor: pointer; accent-color: #007cbf; }
+
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #007cbf 0%, #0056b3 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin-top: 12px;
+            font-size: 14px;
+            box-shadow: 0 4px 15px rgba(0, 124, 191, 0.3);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        button:hover {
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 0 7px 20px rgba(0, 124, 191, 0.4);
+        }
+
+        button:active { transform: translateY(-1px); }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .directions-btn { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); }
+        .directions-btn:hover { background: linear-gradient(135deg, #20c997 0%, #17a2b8 100%); }
+        .clear-selection-btn { background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); }
+        .clear-selection-btn:hover { background: linear-gradient(135deg, #c82333 0%, #bd2130 100%); }
+
+        .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+        .stat-box { background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); padding: 14px; border-radius: 10px; text-align: center; border: 1px solid #dee2e6; transition: all 0.3s ease; }
+        .stat-box:hover { transform: translateY(-4px); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12); }
+        .stat-value { font-size: 30px; font-weight: 700; color: #007cbf; text-shadow: 0 2px 4px rgba(0, 124, 191, 0.15); }
+        .stat-label { font-size: 12px; color: #6c757d; margin-top: 5px; font-weight: 600; text-transform: uppercase; }
+
+        .loading { text-align: center; padding: 24px; color: #6c757d; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #007cbf; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 12px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .mapboxgl-popup-content { padding: 18px; max-width: 340px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .popup-title { font-weight: 700; font-size: 18px; margin-bottom: 12px; color: #1a1a2e; padding-bottom: 8px; border-bottom: 2px solid #007cbf; }
+        .popup-section { margin: 12px 0; font-size: 14px; line-height: 1.6; }
+        .popup-label { font-weight: 600; color: #495057; }
+        .popup-actions { display: flex; gap: 10px; margin-top: 14px; }
+        .popup-btn { flex: 1; padding: 10px; font-size: 12px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; transition: all 0.2s; width: auto; margin: 0; }
+        .popup-btn-primary { background: #007cbf; color: white; }
+        .popup-btn-primary:hover { background: #005a8c; transform: translateY(-1px); }
+        .popup-btn-secondary { background: #28a745; color: white; }
+        .popup-btn-secondary:hover { background: #218838; transform: translateY(-1px); }
+
+        .search-box {
+            width: 100%;
+            padding: 14px;
+            border: 2px solid #dee2e6;
+            border-radius: 10px;
+            font-size: 14px;
+            margin-bottom: 12px;
+            transition: all 0.3s;
+            font-family: inherit;
+        }
+
+        .search-box:focus {
+            outline: none;
+            border-color: #007cbf;
+            box-shadow: 0 0 0 4px rgba(0, 124, 191, 0.15);
+        }
+        
+        .update-indicator {
+            position: absolute;
+            top: -100px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 30px;
+            font-size: 14px;
+            font-weight: 600;
+            transition: top 0.5s cubic-bezier(0.68, -0.55, 0.27, 1.55);
+            z-index: 1000;
+            box-shadow: 0 5px 20px rgba(40, 167, 69, 0.4);
+        }
+
+        .update-indicator.show {
+            top: 20px;
+        }
+
+        .error-container {
+            text-align: center;
+            padding: 24px;
+            background: #fff3cd;
+            border-radius: 10px;
+            border: 2px solid #ffc107;
+        }
+
+        .error-container strong {
+            display: block;
+            margin-bottom: 12px;
+            color: #856404;
+            font-size: 18px;
+        }
+
+        .error-container p {
+            color: #856404;
+            margin-bottom: 16px;
+            line-height: 1.6;
+        }
+
+        .stops-list {
+            max-height: 250px;
+            overflow-y: auto;
+            margin-top: 8px;
+        }
+
+        .stop-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .stop-item:hover {
+            background: #e9ecef;
+            transform: translateX(4px);
+        }
+
+        .stop-item-name {
+            font-weight: 600;
+            color: #212529;
+            font-size: 13px;
+        }
+
+        .stop-item-id {
+            font-size: 11px;
+            color: #6c757d;
+        }
+
+        .stop-item-directions {
+            background: #007cbf;
+            color: white;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .stop-item-directions:hover {
+            background: #005a8c;
+            transform: scale(1.1);
+        }
+
+        .route-summary-transit {
+            background: linear-gradient(135deg, #007cbf 0%, #0056b3 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 16px;
+        }
+
+        .route-summary-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .route-summary-header h4 {
+            margin: 0;
+            font-size: 20px;
+        }
+
+        .close-route-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid white;
+            color: white;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 20px;
+            font-weight: 700;
+            transition: all 0.2s;
+            padding: 0;
+            margin: 0;
+        }
+
+        .close-route-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(1.1);
+        }
+
+        .route-summary-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+
+        .route-stat {
+            text-align: center;
+            background: rgba(255, 255, 255, 0.15);
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .route-stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .route-stat-label {
+            font-size: 11px;
+            opacity: 0.9;
+            text-transform: uppercase;
+        }
+
+        .route-steps {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .route-step {
+            padding: 18px;
+            border-bottom: 1px solid #e9ecef;
+            transition: background-color 0.2s ease;
+        }
+
+        .route-step:hover {
+            background-color: #f8f9fa;
+        }
+
+        .route-step:last-child {
+            border-bottom: none;
+        }
+
+        .route-step-header {
+            display: flex;
+            gap: 14px;
+            margin-bottom: 12px;
+        }
+
+        .route-step-icon {
+            font-size: 24px;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #f1f3f5;
+            border-radius: 10px;
+        }
+
+        .route-step-info {
+            flex: 1;
+        }
+
+        .route-step-line {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 6px;
+        }
+
+        .route-step-line-name {
+            font-weight: 600;
+            font-size: 15px;
+            color: #212529;
+        }
+
+        .route-step-meta {
+            font-size: 12px;
+            color: #6c757d;
+        }
+
+        .next-arrival {
+            color: #28a745;
+            font-weight: 600;
+        }
+
+        .route-step-details {
+            margin-left: 54px;
+        }
+
+        .route-step-stop {
+            padding: 8px 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 14px;
+        }
+
+        .route-step-stop.intermediate {
+            color: #6c757d;
+            font-size: 13px;
+            padding-left: 24px;
+        }
+
+        .route-step-bullet {
+            font-size: 20px;
+        }
+
+        .route-step-bullet.start {
+            color: #28a745;
+        }
+
+        .route-step-bullet.end {
+            color: #dc3545;
+        }
+
+        .route-transfer {
+            padding: 14px 18px;
+            background: #fff3cd;
+            border-left: 5px solid #ffc107;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .route-transfer-icon {
+            font-size: 24px;
+        }
+
+        .route-transfer-text {
+            font-weight: 600;
+            color: #856404;
+        }
+
+        .arrival-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .arrival-time {
+            font-weight: 700;
+            color: #007cbf;
+        }
+
+        .arrival-delay {
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: #ffc107;
+            color: #856404;
+            margin-left: 8px;
+        }
+
+        .arrival-delay.late {
+            background: #dc3545;
+            color: white;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+
+        .loading-overlay.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .loading-content {
+            background: white;
+            padding: 30px;
+            border-radius: 16px;
+            text-align: center;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .loading-content .spinner {
+            margin-bottom: 16px;
+        }
+
+        .network-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 700;
+            margin-left: 8px;
+            text-transform: uppercase;
+        }
+
+        .network-badge.tbm {
+            background: #007cbf;
+            color: white;
+        }
+
+        .network-badge.transgironde {
+            background: #ff6b35;
+            color: white;
+        }
+
+        @media (max-width: 768px) {
+            .map-overlay {
+                max-height: 45vh;
+                width: calc(100vw - 20px)!important;
+                left: 10px!important;
+                right: 10px!important;
+            }
+            .legend { top: auto; bottom: 10px; }
+            .info-panel { bottom: 10px; }
+            .controls { top: 10px; }
+            .directions-panel { bottom: 10px; }
+            
+            .route-summary-stats {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 8px;
+            }
+            
+            .route-stat-value {
+                font-size: 22px;
+            }
+            
+            .route-stat-label {
+                font-size: 10px;
+            }
+        }
+
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div class="update-indicator" id="updateIndicator">✓ Data Updated</div>
+    
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <div style="font-weight: 600; color: #212529;">Calculating route...</div>
+        </div>
+    </div>
+    
+    <div class="map-overlay controls">
+        <h3>
+            🚍 TBM + TransGironde
+            <span class="network-badge tbm">TBM</span>
+            <span class="network-badge transgironde">TG</span>
+        </h3>
+        <div class="filter-group">
+            <label>🔍 Search</label>
+            <input type="text" class="search-box" id="searchBox" placeholder="Search stop or line...">
+        </div>
+        <div class="filter-group">
+            <label>Display Options</label>
+            <div class="checkbox-group">
+                <label class="checkbox-item"><input type="checkbox" id="showShapes" checked><span>🛤️ Line Routes</span></label>
+                <label class="checkbox-item"><input type="checkbox" id="showVehicles" checked><span>🚌 Vehicles</span></label>
+                <label class="checkbox-item"><input type="checkbox" id="showStops" checked><span>📍 Stops</span></label>
+                <label class="checkbox-item"><input type="checkbox" id="showAlerts" checked><span>⚠️ Alerts</span></label>
+                <label class="checkbox-item"><input type="checkbox" id="showHeatmap"><span>🔥 Heatmap</span></label>
+            </div>
+        </div>
+        <button onclick="toggleDirections()" class="directions-btn">🗺️ Plan Trip</button>
+        <button onclick="refreshData()">🔄 Refresh Data</button>
+        <button onclick="centerMap()">📍 Center Map</button>
+        <button onclick="tbmMap.clearSelection()" class="clear-selection-btn" id="clearSelectionBtn" style="display: none;">✕ Clear Selection</button>
+        <div class="stats">
+            <div class="stat-box"><div class="stat-value" id="vehicleCount">-</div><div class="stat-label">Vehicles</div></div>
+            <div class="stat-box"><div class="stat-value" id="alertCount">-</div><div class="stat-label">Alerts</div></div>
+        </div>
+    </div>
+    
+    <div class="map-overlay legend">
+        <h3>📋 Lines</h3>
+        <input type="text" class="search-box" id="lineSearch" placeholder="Filter lines...">
+        <div id="linesContainer"><div class="loading"><div class="spinner"></div>Loading network data...</div></div>
+    </div>
+    
+    <div class="map-overlay info-panel" id="infoPanel" style="display: none;">
+        <h3 id="infoPanelTitle">Details</h3>
+        <div id="infoPanelContent"></div>
+    </div>
+    
+    <div class="map-overlay directions-panel" id="directionsPanel">
+        <h3>🗺️ Transit Trip Planner</h3>
+        <div id="directionsContent">
+            <p style="font-size: 13px; color: #6c757d; margin-bottom: 12px; line-height: 1.6;">
+                Click on any two stops on the map to plan your transit route. 
+                The system will calculate the best route using TBM and TransGironde lines.
+            </p>
+        </div>
+    </div>
+    
+    <script src="tbm-transit.js"></script>
+</body>
+</html>
