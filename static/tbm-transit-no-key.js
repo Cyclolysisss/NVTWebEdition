@@ -78,7 +78,7 @@ class TBMTransitMap {
             }
         };
 
-        this.mapboxToken = 'pk.eyJ1IjoiY3ljbG9vbyIsImEiOiJjbWhnazllNmkwOThvMmlxcmV3dHJqZzhvIn0.nViZuDezlQZ4MDbwFyEmdQ';
+        this.mapboxToken = 'YOUR_MAPBOX_TOKEN';
         this.apiEndpoint = 'http://localhost:8080/api/tbm';
 
         this.init();
