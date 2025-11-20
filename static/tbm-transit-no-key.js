@@ -1,7 +1,7 @@
 // TBM + TransGironde Transit Network Visualization - OPTIMIZED VERSION
 // Enhanced with dual-operator support and advanced routing
-// Version: 1.1.0
-// Last Updated: 2025-11-18 09:00:15 UTC
+// Version: 1.2.0
+// Last Updated: 2025-11-20 06:38:04 UTC
 // User: Cyclolysisss
 
 class TBMTransitMap {
@@ -25,6 +25,10 @@ class TBMTransitMap {
 
         // Popup management
         this.currentPopup = null;
+
+        // Prevent UI flashing
+        this.isUpdating = false;
+        this.updateQueue = [];
 
         // Enhanced line type classification with TransGironde support
         this.lineTypes = {
@@ -78,8 +82,8 @@ class TBMTransitMap {
             }
         };
 
-        this.mapboxToken = 'YOUR_MAPBOX_TOKEN';
-        this.apiEndpoint = 'http://localhost:8080/api/tbm';
+        this.mapboxToken = 'pk.eyJ1IjoiY3ljbG9vbyIsImEiOiJjbWk0aGtxemEwd2R6MmxxdmRyN2g1Y3B0In0.t9ZLPDeBauN_Qwn9oo_s8Q';
+        this.apiEndpoint = 'https://nvt.cyclooo.fr/api/tbm';
 
         this.init();
     }
@@ -89,12 +93,14 @@ class TBMTransitMap {
 
         this.map = new mapboxgl.Map({
             container: 'map',
-            style: 'mapbox://styles/mapbox/standard',
-            center: [-0.5792, 44.8378], // Bordeaux center
-            zoom: 11, // Zoomed out to show wider Gironde region
+            style: this.getMapStyle(),
+            center: [-0.5792, 44.8378],
+            zoom: 11,
             pitch: 45,
             bearing: 0
         });
+
+        window.map = this.map;
 
         this.map.addControl(new mapboxgl.NavigationControl());
         this.map.addControl(new mapboxgl.FullscreenControl());
@@ -112,6 +118,60 @@ class TBMTransitMap {
             this.loadNetworkData();
             this.setupEventListeners();
             this.startAutoRefresh();
+        });
+    }
+
+    getMapStyle() {
+        const isDarkMode = document.documentElement.classList.contains('dark-theme');
+        return isDarkMode ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11';
+    }
+
+    applyThemeToMap() {
+        if (!this.map || !this.map.isStyleLoaded()) {
+            console.log('⚠️ Map not ready for theme change');
+            return;
+        }
+        
+        const style = this.getMapStyle();
+        
+        console.log(`🎨 Applying theme to map: ${style}`);
+        
+        // Store current state
+        const currentCenter = this.map.getCenter();
+        const currentZoom = this.map.getZoom();
+        const currentPitch = this.map.getPitch();
+        const currentBearing = this.map.getBearing();
+        
+        this.map.setStyle(style);
+        
+        // Restore layers and state after style loads
+        this.map.once('style.load', () => {
+            console.log('🎨 Theme applied, restoring layers...');
+            
+            // Restore camera position
+            this.map.jumpTo({
+                center: currentCenter,
+                zoom: currentZoom,
+                pitch: currentPitch,
+                bearing: currentBearing
+            });
+            
+            // Restore all layers
+            this.setupMapLayers();
+            this.setupLineShapes();
+            this.setupTransitRouteLayers();
+            
+            // Re-render data if available
+            if (this.networkData) {
+                requestAnimationFrame(() => {
+                    this.updateMap();
+                    this.updateLineShapes();
+                    if (this.selectedLine) {
+                        this.updateLineShapes(this.selectedLine);
+                        this.updateSelectedLineStops(this.selectedLine);
+                    }
+                });
+            }
         });
     }
 
@@ -378,7 +438,7 @@ class TBMTransitMap {
             tram: 2.5,
             brt: 2,
             bus: 3,
-            transgironde: 4, // Regional buses are typically slower
+            transgironde: 4,
             ferry: 5,
             school: 3,
             night: 3,
@@ -610,7 +670,7 @@ class TBMTransitMap {
         const content = document.getElementById('directionsContent');
 
         content.innerHTML = `
-            <p style="font-size: 13px; color: #6c757d; margin-bottom: 12px; line-height: 1.6;">
+            <p style="font-size: 13px; color: var(--text-tertiary); margin-bottom: 12px; line-height: 1.6;">
                 Click on any two stops on the map to plan your transit route. 
                 The system will calculate the best route using TBM and TransGironde lines.
             </p>
@@ -685,17 +745,13 @@ class TBMTransitMap {
     }
 
     classifyLine(line) {
-        // Check if it's a TransGironde line first
         if (line.operator === "TransGironde") {
             const code = line.line_code.trim();
-
-            // TransGironde lines typically have 3-4 digit codes (e.g., 414, 4312)
             if (/^\d{3,4}$/.test(code)) {
                 return 'transgironde';
             }
         }
 
-        // Original TBM classification logic
         const code = line.line_code.trim();
         const name = line.line_name.trim();
 
@@ -778,7 +834,6 @@ class TBMTransitMap {
                 }
 
                 if (type === 'transgironde') {
-                    // Sort TransGironde lines numerically
                     const numA = parseInt(codeA) || 0;
                     const numB = parseInt(codeB) || 0;
                     return numA - numB;
@@ -812,7 +867,7 @@ class TBMTransitMap {
             (layer) => layer.type === 'symbol' && layer.layout && layer.layout['text-field']
         )?.id;
 
-        if (labelLayerId) {
+        if (labelLayerId && !this.map.getLayer('3d-buildings')) {
             this.map.addLayer({
                 'id': '3d-buildings',
                 'source': 'composite',
@@ -835,170 +890,194 @@ class TBMTransitMap {
             }, labelLayerId);
         }
 
-        this.map.addSource('vehicles', {
-            type: 'geojson',
-            data: { type: 'FeatureCollection', features: [] }
-        });
-
-        this.map.addSource('stops', {
-            type: 'geojson',
-            data: { type: 'FeatureCollection', features: [] }
-        });
-
-        this.map.addSource('selected-line-stops', {
-            type: 'geojson',
-            data: { type: 'FeatureCollection', features: [] }
-        });
-
-        this.map.addLayer({
-            id: 'vehicles-layer',
-            type: 'circle',
-            source: 'vehicles',
-            paint: {
-                'circle-radius': [
-                    'interpolate',
-                    ['linear'],
-                    ['zoom'],
-                    10, 6,
-                    15, 12,
-                    18, 20
-                ],
-                'circle-color': ['get', 'vehicleColor'],
-                'circle-stroke-width': 2,
-                'circle-stroke-color': '#ffffff',
-                'circle-opacity': 0.9
-            }
-        });
-
-        this.map.addLayer({
-            id: 'vehicles-labels',
-            type: 'symbol',
-            source: 'vehicles',
-            minzoom: 14,
-            layout: {
-                'text-field': ['get', 'line_code'],
-                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-                'text-size': 10,
-                'text-offset': [0, 0],
-                'text-anchor': 'center'
-            },
-            paint: {
-                'text-color': '#ffffff',
-                'text-halo-color': '#000000',
-                'text-halo-width': 1
-            }
-        });
-
-        this.map.addLayer({
-            id: 'vehicles-heatmap',
-            type: 'heatmap',
-            source: 'vehicles',
-            layout: { visibility: 'none' },
-            paint: {
-                'heatmap-weight': 1,
-                'heatmap-intensity': 1,
-                'heatmap-radius': 30,
-                'heatmap-opacity': 0.8,
-                'heatmap-color': [
-                    'interpolate',
-                    ['linear'],
-                    ['heatmap-density'],
-                    0, 'rgba(33,102,172,0)',
-                    0.2, 'rgb(103,169,207)',
-                    0.4, 'rgb(209,229,240)',
-                    0.6, 'rgb(253,219,199)',
-                    0.8, 'rgb(239,138,98)',
-                    1, 'rgb(178,24,43)'
-                ]
-            }
-        });
-
-        this.map.addLayer({
-            id: 'stops-layer',
-            type: 'circle',
-            source: 'stops',
-            paint: {
-                'circle-radius': [
-                    'interpolate', ['linear'], ['zoom'],
-                    10, 3, 15, 8
-                ],
-                'circle-color': [
-                    'case',
-                    ['>', ['get', 'alerts'], 0],
-                    '#ff4444', '#007cbf'
-                ],
-                'circle-stroke-width': 2,
-                'circle-stroke-color': '#ffffff',
-                'circle-opacity': 0.8
-            }
-        });
-
-        this.map.addLayer({
-            id: 'selected-line-stops-layer',
-            type: 'circle',
-            source: 'selected-line-stops',
-            paint: {
-                'circle-radius': [
-                    'interpolate', ['linear'], ['zoom'],
-                    10, 5, 15, 12
-                ],
-                'circle-color': '#ff6b00',
-                'circle-stroke-width': 3,
-                'circle-stroke-color': '#ffffff',
-                'circle-opacity': 0.9
-            }
-        });
-
-        this.map.addLayer({
-            id: 'selected-line-stops-labels',
-            type: 'symbol',
-            source: 'selected-line-stops',
-            minzoom: 12,
-            layout: {
-                'text-field': ['get', 'name'],
-                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-                'text-size': 12,
-                'text-offset': [0, 1.8],
-                'text-anchor': 'top'
-            },
-            paint: {
-                'text-color': '#ff6b00',
-                'text-halo-color': '#fff',
-                'text-halo-width': 2
-            }
-        });
-
-        this.map.addLayer({
-            id: 'stops-labels',
-            type: 'symbol',
-            source: 'stops',
-            minzoom: 14,
-            layout: {
-                'text-field': ['get', 'name'],
-                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-                'text-size': 11,
-                'text-offset': [0, 1.5],
-                'text-anchor': 'top'
-            },
-            paint: {
-                'text-color': '#333',
-                'text-halo-color': '#fff',
-                'text-halo-width': 2
-            }
-        });
-
-        this.map.on('click', 'vehicles-layer', (e) => this.onVehicleClick(e));
-        this.map.on('click', 'stops-layer', (e) => this.onStopClick(e));
-        this.map.on('click', 'selected-line-stops-layer', (e) => this.onStopClick(e));
-
-        ['vehicles-layer', 'stops-layer', 'selected-line-stops-layer'].forEach(layer => {
-            this.map.on('mouseenter', layer, () => {
-                this.map.getCanvas().style.cursor = 'pointer';
+        if (!this.map.getSource('vehicles')) {
+            this.map.addSource('vehicles', {
+                type: 'geojson',
+                data: { type: 'FeatureCollection', features: [] }
             });
-            this.map.on('mouseleave', layer, () => {
-                this.map.getCanvas().style.cursor = '';
+        }
+
+        if (!this.map.getSource('stops')) {
+            this.map.addSource('stops', {
+                type: 'geojson',
+                data: { type: 'FeatureCollection', features: [] }
             });
-        });
+        }
+
+        if (!this.map.getSource('selected-line-stops')) {
+            this.map.addSource('selected-line-stops', {
+                type: 'geojson',
+                data: { type: 'FeatureCollection', features: [] }
+            });
+        }
+
+        if (!this.map.getLayer('vehicles-layer')) {
+            this.map.addLayer({
+                id: 'vehicles-layer',
+                type: 'circle',
+                source: 'vehicles',
+                paint: {
+                    'circle-radius': [
+                        'interpolate',
+                        ['linear'],
+                        ['zoom'],
+                        10, 6,
+                        15, 12,
+                        18, 20
+                    ],
+                    'circle-color': ['get', 'vehicleColor'],
+                    'circle-stroke-width': 2,
+                    'circle-stroke-color': '#ffffff',
+                    'circle-opacity': 0.9
+                }
+            });
+        }
+
+        if (!this.map.getLayer('vehicles-labels')) {
+            this.map.addLayer({
+                id: 'vehicles-labels',
+                type: 'symbol',
+                source: 'vehicles',
+                minzoom: 14,
+                layout: {
+                    'text-field': ['get', 'line_code'],
+                    'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+                    'text-size': 10,
+                    'text-offset': [0, 0],
+                    'text-anchor': 'center'
+                },
+                paint: {
+                    'text-color': '#ffffff',
+                    'text-halo-color': '#000000',
+                    'text-halo-width': 1
+                }
+            });
+        }
+
+        if (!this.map.getLayer('vehicles-heatmap')) {
+            this.map.addLayer({
+                id: 'vehicles-heatmap',
+                type: 'heatmap',
+                source: 'vehicles',
+                layout: { visibility: 'none' },
+                paint: {
+                    'heatmap-weight': 1,
+                    'heatmap-intensity': 1,
+                    'heatmap-radius': 30,
+                    'heatmap-opacity': 0.8,
+                    'heatmap-color': [
+                        'interpolate',
+                        ['linear'],
+                        ['heatmap-density'],
+                        0, 'rgba(33,102,172,0)',
+                        0.2, 'rgb(103,169,207)',
+                        0.4, 'rgb(209,229,240)',
+                        0.6, 'rgb(253,219,199)',
+                        0.8, 'rgb(239,138,98)',
+                        1, 'rgb(178,24,43)'
+                    ]
+                }
+            });
+        }
+
+        if (!this.map.getLayer('stops-layer')) {
+            this.map.addLayer({
+                id: 'stops-layer',
+                type: 'circle',
+                source: 'stops',
+                paint: {
+                    'circle-radius': [
+                        'interpolate', ['linear'], ['zoom'],
+                        10, 3, 15, 8
+                    ],
+                    'circle-color': [
+                        'case',
+                        ['>', ['get', 'alerts'], 0],
+                        '#ff4444', '#007cbf'
+                    ],
+                    'circle-stroke-width': 2,
+                    'circle-stroke-color': '#ffffff',
+                    'circle-opacity': 0.8
+                }
+            });
+        }
+
+        if (!this.map.getLayer('selected-line-stops-layer')) {
+            this.map.addLayer({
+                id: 'selected-line-stops-layer',
+                type: 'circle',
+                source: 'selected-line-stops',
+                paint: {
+                    'circle-radius': [
+                        'interpolate', ['linear'], ['zoom'],
+                        10, 5, 15, 12
+                    ],
+                    'circle-color': '#ff6b00',
+                    'circle-stroke-width': 3,
+                    'circle-stroke-color': '#ffffff',
+                    'circle-opacity': 0.9
+                }
+            });
+        }
+
+        if (!this.map.getLayer('selected-line-stops-labels')) {
+            this.map.addLayer({
+                id: 'selected-line-stops-labels',
+                type: 'symbol',
+                source: 'selected-line-stops',
+                minzoom: 12,
+                layout: {
+                    'text-field': ['get', 'name'],
+                    'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+                    'text-size': 12,
+                    'text-offset': [0, 1.8],
+                    'text-anchor': 'top'
+                },
+                paint: {
+                    'text-color': '#ff6b00',
+                    'text-halo-color': '#fff',
+                    'text-halo-width': 2
+                }
+            });
+        }
+
+        if (!this.map.getLayer('stops-labels')) {
+            this.map.addLayer({
+                id: 'stops-labels',
+                type: 'symbol',
+                source: 'stops',
+                minzoom: 14,
+                layout: {
+                    'text-field': ['get', 'name'],
+                    'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+                    'text-size': 11,
+                    'text-offset': [0, 1.5],
+                    'text-anchor': 'top'
+                },
+                paint: {
+                    'text-color': '#333',
+                    'text-halo-color': '#fff',
+                    'text-halo-width': 2
+                }
+            });
+        }
+
+        if (!this._eventListenersSetup) {
+            this.map.on('click', 'vehicles-layer', (e) => this.onVehicleClick(e));
+            this.map.on('click', 'stops-layer', (e) => this.onStopClick(e));
+            this.map.on('click', 'selected-line-stops-layer', (e) => this.onStopClick(e));
+
+            ['vehicles-layer', 'stops-layer', 'selected-line-stops-layer'].forEach(layer => {
+                this.map.on('mouseenter', layer, () => {
+                    this.map.getCanvas().style.cursor = 'pointer';
+                });
+                this.map.on('mouseleave', layer, () => {
+                    this.map.getCanvas().style.cursor = '';
+                });
+            });
+
+            this._eventListenersSetup = true;
+        }
 
         console.log('✅ Map layers setup complete');
     }
@@ -1006,58 +1085,66 @@ class TBMTransitMap {
     setupLineShapes() {
         console.log('🛤️  Setting up line shapes...');
 
-        this.map.addSource('line-shapes', {
-            type: 'geojson',
-            data: { type: 'FeatureCollection', features: [] }
-        });
+        if (!this.map.getSource('line-shapes')) {
+            this.map.addSource('line-shapes', {
+                type: 'geojson',
+                data: { type: 'FeatureCollection', features: [] }
+            });
+        }
 
-        this.map.addLayer({
-            id: 'line-shapes-layer',
-            type: 'line',
-            source: 'line-shapes',
-            layout: {
-                'line-join': 'round',
-                'line-cap': 'round'
-            },
-            paint: {
-                'line-color': ['get', 'color'],
-                'line-width': [
-                    'interpolate', ['linear'], ['zoom'],
-                    10, 2, 15, 4, 18, 6
-                ],
-                'line-opacity': 0.7
-            }
-        }, 'vehicles-layer');
+        if (!this.map.getLayer('line-shapes-layer')) {
+            this.map.addLayer({
+                id: 'line-shapes-layer',
+                type: 'line',
+                source: 'line-shapes',
+                layout: {
+                    'line-join': 'round',
+                    'line-cap': 'round'
+                },
+                paint: {
+                    'line-color': ['get', 'color'],
+                    'line-width': [
+                        'interpolate', ['linear'], ['zoom'],
+                        10, 2, 15, 4, 18, 6
+                    ],
+                    'line-opacity': 0.7
+                }
+            }, 'vehicles-layer');
+        }
 
-        this.map.on('click', 'line-shapes-layer', (e) => {
-            const feature = e.features[0];
-            const props = feature.properties;
+        if (!this._shapeEventListenersSetup) {
+            this.map.on('click', 'line-shapes-layer', (e) => {
+                const feature = e.features[0];
+                const props = feature.properties;
 
-            const operatorBadge = props.operator === 'TransGironde' ?
-                '<span class="operator-badge transgironde">TransGironde</span>' :
-                '<span class="operator-badge">TBM</span>';
+                const operatorBadge = props.operator === 'TransGironde' ?
+                    '<span class="operator-badge transgironde">TransGironde</span>' :
+                    '<span class="operator-badge">TBM</span>';
 
-            this.closeCurrentPopup();
-            this.currentPopup = new mapboxgl.Popup()
-                .setLngLat(e.lngLat)
-                .setHTML(`
-                    <div class="popup-title">Line ${props.line_code} ${operatorBadge}</div>
-                    <div class="popup-section">
-                        <span class="popup-label">Name:</span> ${props.line_name}
-                    </div>
-                    <div class="popup-section">
-                        <span class="popup-label">Route ID:</span> ${props.route_id}
-                    </div>
-                `)
-                .addTo(this.map);
-        });
+                this.closeCurrentPopup();
+                this.currentPopup = new mapboxgl.Popup()
+                    .setLngLat(e.lngLat)
+                    .setHTML(`
+                        <div class="popup-title">Line ${props.line_code} ${operatorBadge}</div>
+                        <div class="popup-section">
+                            <span class="popup-label">Name:</span> ${props.line_name}
+                        </div>
+                        <div class="popup-section">
+                            <span class="popup-label">Route ID:</span> ${props.route_id}
+                        </div>
+                    `)
+                    .addTo(this.map);
+            });
 
-        this.map.on('mouseenter', 'line-shapes-layer', () => {
-            this.map.getCanvas().style.cursor = 'pointer';
-        });
-        this.map.on('mouseleave', 'line-shapes-layer', () => {
-            this.map.getCanvas().style.cursor = '';
-        });
+            this.map.on('mouseenter', 'line-shapes-layer', () => {
+                this.map.getCanvas().style.cursor = 'pointer';
+            });
+            this.map.on('mouseleave', 'line-shapes-layer', () => {
+                this.map.getCanvas().style.cursor = '';
+            });
+
+            this._shapeEventListenersSetup = true;
+        }
 
         console.log('✅ Line shapes setup complete');
     }
@@ -1087,7 +1174,6 @@ class TBMTransitMap {
                 throw new Error('Response missing stops or lines data');
             }
 
-            // Count operators
             const operators = {};
             this.networkData.lines.forEach(line => {
                 operators[line.operator] = (operators[line.operator] || 0) + 1;
@@ -1101,15 +1187,16 @@ class TBMTransitMap {
             });
             console.log(`   • ${this.networkData.shapes ? Object.keys(this.networkData.shapes).length : 0} shapes`);
 
-            // Invalidate caches
             this.cachedStopGraph = null;
             this.cachedLinesByType = null;
 
-            this.updateMap();
-            this.updateLineShapes();
-            this.updateLegend();
-            this.updateStats();
-            this.showUpdateIndicator();
+            requestAnimationFrame(() => {
+                this.updateMap();
+                this.updateLineShapes();
+                this.updateLegend();
+                this.updateStats();
+                this.showUpdateIndicator();
+            });
         } catch (error) {
             console.error('❌ Error loading network data:', error);
             this.showError(`Failed to load network data: ${error.message}`);
@@ -1294,7 +1381,7 @@ class TBMTransitMap {
         }
 
         this.renderDebounceTimer = setTimeout(() => {
-            this._doUpdateLegend();
+            requestAnimationFrame(() => this._doUpdateLegend());
         }, 100);
     }
 
@@ -1443,7 +1530,7 @@ class TBMTransitMap {
         document.getElementById('infoPanel').style.display = 'none';
         document.getElementById('clearSelectionBtn').style.display = 'none';
 
-        const showStops = document.getElementById('showStops').checked;
+        const showStops = document.getElementById('showStops') ? document.getElementById('showStops').checked : true;
         this.map.setLayoutProperty('stops-layer', 'visibility', showStops ? 'visible' : 'none');
         this.map.setLayoutProperty('stops-labels', 'visibility', showStops ? 'visible' : 'none');
 
@@ -1612,20 +1699,20 @@ class TBMTransitMap {
                 <div class="popup-section">
                     <span class="popup-label">🕐 Next Arrivals:</span>
                     ${sortedArrivals.map(rt => {
-                const time = new Date(rt.timestamp * 1000);
-                const now = new Date();
-                const minutesUntil = Math.floor((time - now) / 60000);
-                const timeStr = minutesUntil < 0 ? 'Arriving' :
-                    minutesUntil === 0 ? 'Now' :
-                        `${minutesUntil} min`;
+                        const time = new Date(rt.timestamp * 1000);
+                        const now = new Date();
+                        const minutesUntil = Math.floor((time - now) / 60000);
+                        const timeStr = minutesUntil < 0 ? 'Arriving' :
+                            minutesUntil === 0 ? 'Now' :
+                                `${minutesUntil} min`;
 
-                const line = this.networkData.lines.find(l => l.route_id === rt.route_id);
-                const lineCode = line ? line.line_code : '?';
-                const lineColor = line ? line.color : '808080';
-                const operatorBadge = line && line.operator === 'TransGironde' ?
-                    '<span class="operator-badge transgironde" style="margin-left: 8px;">TG</span>' : '';
+                        const line = this.networkData.lines.find(l => l.route_id === rt.route_id);
+                        const lineCode = line ? line.line_code : '?';
+                        const lineColor = line ? line.color : '808080';
+                        const operatorBadge = line && line.operator === 'TransGironde' ?
+                            '<span class="operator-badge transgironde" style="margin-left: 8px;">TG</span>' : '';
 
-                return `
+                        return `
                             <div class="arrival-item">
                                 <div>
                                     <span class="line-badge" style="background-color: #${lineColor}; display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
@@ -1637,7 +1724,7 @@ class TBMTransitMap {
                                 <div class="arrival-time">${timeStr}</div>
                             </div>
                         `;
-            }).join('')}
+                    }).join('')}
                 </div>
             `;
         }
@@ -1720,55 +1807,70 @@ class TBMTransitMap {
     }
 
     setupEventListeners() {
-        document.getElementById('showShapes').addEventListener('change', (e) => {
-            this.map.setLayoutProperty('line-shapes-layer', 'visibility',
-                e.target.checked ? 'visible' : 'none');
-        });
+        const desktopCheckboxes = ['showShapes', 'showVehicles', 'showStops', 'showAlerts', 'showHeatmap'];
+        
+        desktopCheckboxes.forEach(id => {
+            const checkbox = document.getElementById(id);
+            if (!checkbox) return;
 
-        document.getElementById('showVehicles').addEventListener('change', (e) => {
-            const visibility = e.target.checked ? 'visible' : 'none';
-            this.map.setLayoutProperty('vehicles-layer', 'visibility', visibility);
-            this.map.setLayoutProperty('vehicles-labels', 'visibility', visibility);
-        });
-
-        document.getElementById('showStops').addEventListener('change', (e) => {
-            const visibility = e.target.checked ? 'visible' : 'none';
-            if (!this.selectedLine) {
-                this.map.setLayoutProperty('stops-layer', 'visibility', visibility);
-                this.map.setLayoutProperty('stops-labels', 'visibility', visibility);
+            if (id === 'showShapes') {
+                checkbox.addEventListener('change', (e) => {
+                    this.map.setLayoutProperty('line-shapes-layer', 'visibility',
+                        e.target.checked ? 'visible' : 'none');
+                });
+            } else if (id === 'showVehicles') {
+                checkbox.addEventListener('change', (e) => {
+                    const visibility = e.target.checked ? 'visible' : 'none';
+                    this.map.setLayoutProperty('vehicles-layer', 'visibility', visibility);
+                    this.map.setLayoutProperty('vehicles-labels', 'visibility', visibility);
+                });
+            } else if (id === 'showStops') {
+                checkbox.addEventListener('change', (e) => {
+                    const visibility = e.target.checked ? 'visible' : 'none';
+                    if (!this.selectedLine) {
+                        this.map.setLayoutProperty('stops-layer', 'visibility', visibility);
+                        this.map.setLayoutProperty('stops-labels', 'visibility', visibility);
+                    }
+                });
+            } else if (id === 'showAlerts') {
+                checkbox.addEventListener('change', (e) => {
+                    if (e.target.checked) {
+                        this.map.setFilter('stops-layer', null);
+                    } else {
+                        this.map.setFilter('stops-layer', ['==', ['get', 'alerts'], 0]);
+                    }
+                });
+            } else if (id === 'showHeatmap') {
+                checkbox.addEventListener('change', (e) => {
+                    this.map.setLayoutProperty('vehicles-heatmap', 'visibility',
+                        e.target.checked ? 'visible' : 'none');
+                    this.map.setLayoutProperty('vehicles-layer', 'visibility',
+                        e.target.checked ? 'none' : 'visible');
+                    this.map.setLayoutProperty('vehicles-labels', 'visibility',
+                        e.target.checked ? 'none' : 'visible');
+                });
             }
         });
 
-        document.getElementById('showAlerts').addEventListener('change', (e) => {
-            if (e.target.checked) {
-                this.map.setFilter('stops-layer', null);
-            } else {
-                this.map.setFilter('stops-layer', ['==', ['get', 'alerts'], 0]);
-            }
-        });
+        const lineSearch = document.getElementById('lineSearch');
+        if (lineSearch) {
+            lineSearch.addEventListener('input', () => {
+                this.updateLegend();
+            });
+        }
 
-        document.getElementById('showHeatmap').addEventListener('change', (e) => {
-            this.map.setLayoutProperty('vehicles-heatmap', 'visibility',
-                e.target.checked ? 'visible' : 'none');
-            this.map.setLayoutProperty('vehicles-layer', 'visibility',
-                e.target.checked ? 'none' : 'visible');
-            this.map.setLayoutProperty('vehicles-labels', 'visibility',
-                e.target.checked ? 'none' : 'visible');
-        });
+        const searchBox = document.getElementById('searchBox');
+        if (searchBox) {
+            searchBox.addEventListener('input', (e) => {
+                if (this.searchDebounceTimer) {
+                    clearTimeout(this.searchDebounceTimer);
+                }
 
-        document.getElementById('lineSearch').addEventListener('input', () => {
-            this.updateLegend();
-        });
-
-        document.getElementById('searchBox').addEventListener('input', (e) => {
-            if (this.searchDebounceTimer) {
-                clearTimeout(this.searchDebounceTimer);
-            }
-
-            this.searchDebounceTimer = setTimeout(() => {
-                this.handleSearch(e.target.value);
-            }, 300);
-        });
+                this.searchDebounceTimer = setTimeout(() => {
+                    this.handleSearch(e.target.value);
+                }, 300);
+            });
+        }
     }
 
     handleSearch(query) {
@@ -1806,8 +1908,11 @@ class TBMTransitMap {
             sum + (stop.alerts || []).length, 0
         );
 
-        document.getElementById('vehicleCount').textContent = totalVehicles;
-        document.getElementById('alertCount').textContent = totalAlerts;
+        const vehicleCountEl = document.getElementById('vehicleCount');
+        const alertCountEl = document.getElementById('alertCount');
+
+        if (vehicleCountEl) vehicleCountEl.textContent = totalVehicles;
+        if (alertCountEl) alertCountEl.textContent = totalAlerts;
     }
 
     startAutoRefresh() {
@@ -1852,7 +1957,7 @@ class TBMTransitMap {
     }
 }
 
-// Global functions
+// Global functions for HTML onclick handlers
 function refreshData() {
     tbmMap.loadNetworkData();
 }
@@ -1874,12 +1979,16 @@ function toggleDirections() {
     }
 }
 
+function closeInfoPanel() {
+    document.getElementById('infoPanel').style.display = 'none';
+}
+
 // Initialize
 let tbmMap;
 window.addEventListener('DOMContentLoaded', () => {
-    console.log('🚀 TBM + TransGironde Transit Map Initializing...');
-    console.log('📅 Build: 2025-11-18 09:03:35 UTC');
+    console.log('🚀 NVT Transit Map Initializing...');
+    console.log('📅 Build: 2025-11-20 06:41:53 UTC');
     console.log('👤 User: Cyclolysisss');
-    console.log('🌐 Version: 1.1.0 - Dual Operator Support');
+    console.log('🌐 Version: 1.2.0 - Dark Mode Fix + Mobile Dropdown + Performance Optimization');
     tbmMap = new TBMTransitMap();
 });
