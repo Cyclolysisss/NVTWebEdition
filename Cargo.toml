@@ -1,0 +1,41 @@
+[package]
+name = "NVTWebEdition"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Web framework
+actix-web = "4"
+actix-cors = "0.7"
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+
+# GTFS-RT - must match prost version
+gtfs-rt = "0.4"
+prost = "0.11"  # Changed back to 0.11 to match gtfs-rt
+
+# Date/Time
+chrono = "0.4"
+chrono-tz = "0.8"
+
+# CSV parsing
+csv = "1.3"
+
+# ZIP handling
+zip = "0.6"
+
+# Utilities
+dirs = "5.0"
+bytes = "1.11.0"
+actix-files = "0.6.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
