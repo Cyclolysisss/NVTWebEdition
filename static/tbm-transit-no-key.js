@@ -35,6 +35,10 @@ class TBMTransitMap {
         this.ROUTE_SEARCH_RANGE = 25;
         this.MAX_ROUTES_TO_FIND = 5;
 
+        // Time calculation constants
+        this.SECONDS_PER_HOUR = 3600;
+        this.SECONDS_PER_MINUTE = 60;
+
         // Enhanced line type classification with TransGironde and SNCF support
         this.lineTypes = {
             tram: {
@@ -574,7 +578,7 @@ class TBMTransitMap {
         
         if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) return null;
         
-        return hours * 3600 + minutes * 60 + seconds;
+        return hours * this.SECONDS_PER_HOUR + minutes * this.SECONDS_PER_MINUTE + seconds;
     }
 
     /**
@@ -595,7 +599,7 @@ class TBMTransitMap {
      */
     getCurrentTimeInSeconds() {
         const now = new Date();
-        return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+        return now.getHours() * this.SECONDS_PER_HOUR + now.getMinutes() * this.SECONDS_PER_MINUTE + now.getSeconds();
     }
 
     /**
@@ -606,26 +610,29 @@ class TBMTransitMap {
     formatGTFSTime(seconds) {
         if (seconds === null) return 'N/A';
         
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
+        const hours = Math.floor(seconds / this.SECONDS_PER_HOUR);
+        const minutes = Math.floor((seconds % this.SECONDS_PER_HOUR) / this.SECONDS_PER_MINUTE);
         
         return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
     }
 
     /**
      * Get scheduled arrivals for a stop from GTFS data
-     * This would need to be called with schedule data from the backend
+     * 
+     * @todo This function is not yet fully implemented - requires backend integration
+     * @param {string} stopId - The stop ID to get arrivals for
+     * @param {number} maxResults - Maximum number of results to return
+     * @returns {Array} Array of scheduled arrival objects (empty until backend is integrated)
+     * 
+     * To complete implementation:
+     * 1. Add backend API endpoint to serve schedule data
+     * 2. Implement service calendar checking (which services run today)
+     * 3. Apply calendar_dates exceptions
+     * 4. Filter stop_times for active services
+     * 5. Return sorted upcoming arrivals
      */
     getScheduledArrivals(stopId, maxResults = 5) {
-        // This is a placeholder for when we have schedule data from the backend
-        // In a full implementation, this would:
-        // 1. Get current day of week and date
-        // 2. Check calendar.txt to find active services
-        // 3. Check calendar_dates.txt for exceptions
-        // 4. Filter stop_times for this stop and active services
-        // 5. Find upcoming arrivals based on current time
-        // 6. Return sorted list of next arrivals
-        
+        // Placeholder - backend integration needed
         console.log('📅 Schedule prediction placeholder - backend integration needed for stop:', stopId);
         return [];
     }
@@ -1953,7 +1960,17 @@ class TBMTransitMap {
                 </div>
             `;
         } else {
-            // Show scheduled arrivals info when no real-time data
+            // Only attempt scheduled arrivals if backend is ready
+            // For now, show informative message since getScheduledArrivals returns empty array
+            arrivalsHTML = `
+                <div class="popup-section popup-info-message">
+                    <span class="popup-label">ℹ️ Info:</span>
+                    No real-time arrival data available for this stop.
+                    Schedule-based predictions coming soon.
+                </div>
+            `;
+            
+            /* Future implementation when backend is ready:
             const scheduledArrivals = this.getScheduledArrivals(stop.stop_id);
             
             if (scheduledArrivals.length > 0) {
@@ -1973,15 +1990,8 @@ class TBMTransitMap {
                         `).join('')}
                     </div>
                 `;
-            } else {
-                arrivalsHTML = `
-                    <div class="popup-section popup-info-message">
-                        <span class="popup-label">ℹ️ Info:</span>
-                        No real-time arrival data available for this stop.
-                        Schedule-based predictions coming soon.
-                    </div>
-                `;
             }
+            */
         }
 
         this.closeCurrentPopup();
