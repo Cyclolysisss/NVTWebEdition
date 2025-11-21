@@ -2212,7 +2212,7 @@ impl NVTModels {
             route_id.split(':').last().unwrap_or(route_id).to_string()
         } else {
             // SNCF and others: use as is
-                        route_id.to_string()
+            route_id.to_string()
         }
     }
 }
