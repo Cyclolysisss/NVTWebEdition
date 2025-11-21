@@ -151,49 +151,25 @@ class TBMTransitMap {
 
             const prefs = JSON.parse(saved);
             
-            // Apply to desktop checkboxes
-            if (prefs.showShapes !== undefined) {
-                const el = document.getElementById('showShapes');
-                if (el) el.checked = prefs.showShapes;
-            }
-            if (prefs.showVehicles !== undefined) {
-                const el = document.getElementById('showVehicles');
-                if (el) el.checked = prefs.showVehicles;
-            }
-            if (prefs.showStops !== undefined) {
-                const el = document.getElementById('showStops');
-                if (el) el.checked = prefs.showStops;
-            }
-            if (prefs.showAlerts !== undefined) {
-                const el = document.getElementById('showAlerts');
-                if (el) el.checked = prefs.showAlerts;
-            }
-            if (prefs.showHeatmap !== undefined) {
-                const el = document.getElementById('showHeatmap');
-                if (el) el.checked = prefs.showHeatmap;
-            }
+            // Preference mapping: [preference key, desktop element ID, mobile element ID]
+            const prefMappings = [
+                ['showShapes', 'showShapes', 'showShapesMobile'],
+                ['showVehicles', 'showVehicles', 'showVehiclesMobile'],
+                ['showStops', 'showStops', 'showStopsMobile'],
+                ['showAlerts', 'showAlerts', 'showAlertsMobile'],
+                ['showHeatmap', 'showHeatmap', 'showHeatmapMobile']
+            ];
 
-            // Apply to mobile checkboxes
-            if (prefs.showShapes !== undefined) {
-                const el = document.getElementById('showShapesMobile');
-                if (el) el.checked = prefs.showShapes;
-            }
-            if (prefs.showVehicles !== undefined) {
-                const el = document.getElementById('showVehiclesMobile');
-                if (el) el.checked = prefs.showVehicles;
-            }
-            if (prefs.showStops !== undefined) {
-                const el = document.getElementById('showStopsMobile');
-                if (el) el.checked = prefs.showStops;
-            }
-            if (prefs.showAlerts !== undefined) {
-                const el = document.getElementById('showAlertsMobile');
-                if (el) el.checked = prefs.showAlerts;
-            }
-            if (prefs.showHeatmap !== undefined) {
-                const el = document.getElementById('showHeatmapMobile');
-                if (el) el.checked = prefs.showHeatmap;
-            }
+            // Apply preferences to both desktop and mobile checkboxes
+            prefMappings.forEach(([prefKey, desktopId, mobileId]) => {
+                if (prefs[prefKey] !== undefined) {
+                    const desktopEl = document.getElementById(desktopId);
+                    const mobileEl = document.getElementById(mobileId);
+                    
+                    if (desktopEl) desktopEl.checked = prefs[prefKey];
+                    if (mobileEl) mobileEl.checked = prefs[prefKey];
+                }
+            });
 
             console.log('✅ Preferences loaded');
         } catch (e) {
@@ -624,11 +600,13 @@ class TBMTransitMap {
 
     /**
      * Format seconds since midnight to HH:MM format
+     * Note: GTFS allows times > 24 hours for next-day services (e.g., 25:30:00)
+     * We preserve the original hour value to maintain this information
      */
     formatGTFSTime(seconds) {
         if (seconds === null) return 'N/A';
         
-        const hours = Math.floor(seconds / 3600) % 24;
+        const hours = Math.floor(seconds / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
         
         return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
