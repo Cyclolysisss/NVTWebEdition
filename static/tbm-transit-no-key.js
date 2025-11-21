@@ -30,7 +30,7 @@ class TBMTransitMap {
         this.isUpdating = false;
         this.updateQueue = [];
 
-        // Enhanced line type classification with TransGironde support
+        // Enhanced line type classification with TransGironde and SNCF support
         this.lineTypes = {
             tram: {
                 icon: '🚊',
@@ -56,23 +56,59 @@ class TBMTransitMap {
                 patterns: [/^\d{3,4}$/],
                 order: 4
             },
+            tgv_inoui: {
+                icon: '🚄',
+                name: 'TGV INOUI',
+                patterns: [/TGV\s*INOUI/i, /INOUI/i],
+                order: 5
+            },
+            tgv: {
+                icon: '🚅',
+                name: 'TGV',
+                patterns: [/^TGV$/i, /TGV(?!\s*INOUI)/i],
+                order: 6
+            },
+            ice: {
+                icon: '🚆',
+                name: 'ICE (International)',
+                patterns: [/ICE/i, /International/i],
+                order: 7
+            },
+            ter: {
+                icon: '🚂',
+                name: 'Train TER',
+                patterns: [/Train\s*TER/i, /^TER$/i],
+                order: 8
+            },
+            ter_car: {
+                icon: '🚌',
+                name: 'Car TER',
+                patterns: [/Car\s*TER/i],
+                order: 9
+            },
+            navette: {
+                icon: '🚐',
+                name: 'Navette',
+                patterns: [/Navette/i, /Shuttle/i],
+                order: 10
+            },
             school: {
                 icon: '🎒',
                 name: 'School Lines',
                 patterns: [/^S\d+$/, /^S\s*\d+$/],
-                order: 5
+                order: 11
             },
             night: {
                 icon: '🌙',
                 name: 'Night Lines',
                 patterns: [/^N\d+$/, /^N\s*\d+$/, /^TBNight$/],
-                order: 6
+                order: 12
             },
             ferry: {
                 icon: '⛴️',
                 name: 'BAT (Ferry)',
                 patterns: [/^95[0-9]$/, /^BAT\s*\d*$/i, /^BAT$/i],
-                order: 7
+                order: 13
             },
             other: {
                 icon: '🚐',
@@ -559,9 +595,7 @@ class TBMTransitMap {
             const stops = segment.stops.length - 1;
             const duration = Math.round(this.estimateDuration(segment, line));
 
-            const operatorBadge = line.operator === 'TransGironde' ?
-                '<span class="operator-badge transgironde">TransGironde</span>' :
-                '<span class="operator-badge">TBM</span>';
+            const operatorBadge = this.getOperatorBadge(line.operator);
 
             let nextArrival = '';
             if (segment.from.real_time && segment.from.real_time.length > 0) {
@@ -752,11 +786,29 @@ class TBMTransitMap {
             }
         }
 
+        if (line.operator === "SNCF") {
+            const code = line.line_code.trim();
+            const name = line.line_name.trim();
+            
+            // Check for SNCF line types based on patterns
+            const sncfTypes = ['tgv_inoui', 'tgv', 'ice', 'ter', 'ter_car', 'navette'];
+            for (const type of sncfTypes) {
+                const config = this.lineTypes[type];
+                for (const pattern of config.patterns) {
+                    if (pattern.test(code) || pattern.test(name)) {
+                        return type;
+                    }
+                }
+            }
+            return 'other';
+        }
+
         const code = line.line_code.trim();
         const name = line.line_name.trim();
 
         const sortedTypes = Object.entries(this.lineTypes)
-            .filter(([type]) => type !== 'other' && type !== 'transgironde')
+            .filter(([type]) => type !== 'other' && type !== 'transgironde' && 
+                    !['tgv_inoui', 'tgv', 'ice', 'ter', 'ter_car', 'navette'].includes(type))
             .sort((a, b) => a[1].order - b[1].order);
 
         for (const [type, config] of sortedTypes) {
@@ -773,6 +825,20 @@ class TBMTransitMap {
         }
 
         return 'other';
+    }
+
+    getOperatorBadge(operator, short = false) {
+        if (operator === 'TransGironde') {
+            return short ? 
+                '<span class="operator-badge transgironde">TG</span>' :
+                '<span class="operator-badge transgironde">TransGironde</span>';
+        } else if (operator === 'SNCF') {
+            return short ?
+                '<span class="operator-badge sncf">SNCF</span>' :
+                '<span class="operator-badge sncf">SNCF</span>';
+        } else {
+            return '<span class="operator-badge">TBM</span>';
+        }
     }
 
     groupLinesByType() {
@@ -1117,9 +1183,7 @@ class TBMTransitMap {
                 const feature = e.features[0];
                 const props = feature.properties;
 
-                const operatorBadge = props.operator === 'TransGironde' ?
-                    '<span class="operator-badge transgironde">TransGironde</span>' :
-                    '<span class="operator-badge">TBM</span>';
+                const operatorBadge = this.getOperatorBadge(props.operator);
 
                 this.closeCurrentPopup();
                 this.currentPopup = new mapboxgl.Popup()
@@ -1446,9 +1510,7 @@ class TBMTransitMap {
         const textColor = this.getContrastColor(rgb);
         const isSelected = this.selectedLine === line.line_ref;
 
-        const operatorBadge = line.operator === 'TransGironde' ?
-            '<span class="operator-badge transgironde">TG</span>' :
-            '<span class="operator-badge">TBM</span>';
+        const operatorBadge = this.getOperatorBadge(line.operator, true);
 
         return `
             <div class="line-item ${isSelected ? 'selected' : ''}" onclick="tbmMap.selectLine('${line.line_ref}')">
@@ -1602,9 +1664,7 @@ class TBMTransitMap {
         const content = document.getElementById('infoPanelContent');
 
         const lineType = this.lineTypes[this.classifyLine(line)];
-        const operatorBadge = line.operator === 'TransGironde' ?
-            '<span class="network-badge transgironde">TransGironde</span>' :
-            '<span class="network-badge tbm">TBM</span>';
+        const operatorBadge = this.getOperatorBadge(line.operator).replace('operator-badge', 'network-badge');
 
         title.innerHTML = `${lineType.icon} Line ${line.line_code} - ${line.line_name} ${operatorBadge}`;
 
@@ -1709,8 +1769,7 @@ class TBMTransitMap {
                         const line = this.networkData.lines.find(l => l.route_id === rt.route_id);
                         const lineCode = line ? line.line_code : '?';
                         const lineColor = line ? line.color : '808080';
-                        const operatorBadge = line && line.operator === 'TransGironde' ?
-                            '<span class="operator-badge transgironde" style="margin-left: 8px;">TG</span>' : '';
+                        const operatorBadge = line ? this.getOperatorBadge(line.operator, true).replace('operator-badge', 'operator-badge" style="margin-left: 8px;') : '';
 
                         return `
                             <div class="arrival-item">
@@ -1770,9 +1829,7 @@ class TBMTransitMap {
         const delayText = props.delay ?
             `<div class="arrival-delay ${props.delay > 0 ? 'late' : ''}">${props.delay > 0 ? '+' : ''}${props.delay}s</div>` : '';
 
-        const operatorBadge = props.operator === 'TransGironde' ?
-            '<span class="network-badge transgironde">TransGironde</span>' :
-            '<span class="network-badge tbm">TBM</span>';
+        const operatorBadge = this.getOperatorBadge(props.operator).replace('operator-badge', 'network-badge');
 
         this.closeCurrentPopup();
         this.currentPopup = new mapboxgl.Popup()

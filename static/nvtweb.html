@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NVT (Next-Vehicle-TBM) - Web/Graphical Edition</title>
+    <title>NVT (Next-Vehicle) - TBM + TransGironde + SNCF</title>
     
     <!-- Mapbox GL JS -->
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.17.0-beta.1/mapbox-gl.css" rel="stylesheet">
@@ -284,6 +284,11 @@
         .network-badge { display: inline-block; padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: 700; margin-left: 8px; text-transform: uppercase; }
         .network-badge.tbm { background: #007cbf; color: white; }
         .network-badge.transgironde { background: #ff6b35; color: white; }
+        .network-badge.sncf { background: #82BE00; color: white; }
+        
+        .operator-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 700; margin-left: 6px; text-transform: uppercase; }
+        .operator-badge.transgironde { background: #ff6b35; color: white; }
+        .operator-badge.sncf { background: #82BE00; color: white; }
 
         .theme-toggle { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); background: var(--overlay-bg); border: 1.5px solid var(--overlay-border); border-radius: 30px; padding: 8px; display: flex; align-items: center; gap: 10px; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 12px var(--shadow-color); z-index: 999; }
         .theme-toggle:hover { transform: translateX(-50%) scale(1.05); }
@@ -424,9 +429,10 @@
     <!-- Desktop Controls -->
     <div class="map-overlay controls">
         <h3>
-            🚍 NVT (TBM + TransGironde)
+            🚍 NVT (TBM + TransGironde + SNCF)
             <span class="network-badge tbm">TBM</span>
             <span class="network-badge transgironde">TG</span>
+            <span class="network-badge sncf">SNCF</span>
         </h3>
         <div class="filter-group">
             <label for="searchBox">🔍 Search</label>
@@ -476,7 +482,7 @@
         <div id="directionsContent">
             <p style="font-size: 13px; color: var(--text-tertiary); margin-bottom: 12px; line-height: 1.6;">
                 Click on any two stops on the map to plan your transit route. 
-                The system will calculate the best route using TBM and TransGironde lines.
+                The system will calculate the best route using TBM, TransGironde, and SNCF lines.
             </p>
         </div>
     </div>
