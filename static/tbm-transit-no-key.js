@@ -30,6 +30,17 @@ class TBMTransitMap {
         this.isUpdating = false;
         this.updateQueue = [];
 
+        // Route planning configuration
+        this.MAX_ROUTE_ITERATIONS = 20000;
+        this.ROUTE_SEARCH_RANGE = 25;
+        this.MAX_ROUTES_TO_FIND = 5;
+
+        // Time calculation constants
+        // Note: Defined explicitly for clarity and to match backend constants
+        // rather than using built-in Date methods for consistency
+        this.SECONDS_PER_HOUR = 3600;
+        this.SECONDS_PER_MINUTE = 60;
+
         // Enhanced line type classification with TransGironde and SNCF support
         this.lineTypes = {
             tram: {
@@ -122,6 +133,54 @@ class TBMTransitMap {
         this.apiEndpoint = 'https://nvt.cyclooo.fr/api/tbm';
 
         this.init();
+    }
+
+    // Save user preferences to localStorage
+    savePreferences() {
+        const prefs = {
+            showShapes: document.getElementById('showShapes')?.checked ?? true,
+            showVehicles: document.getElementById('showVehicles')?.checked ?? true,
+            showStops: document.getElementById('showStops')?.checked ?? true,
+            showAlerts: document.getElementById('showAlerts')?.checked ?? true,
+            showHeatmap: document.getElementById('showHeatmap')?.checked ?? false,
+        };
+        
+        localStorage.setItem('nvt_preferences', JSON.stringify(prefs));
+        console.log('💾 Preferences saved');
+    }
+
+    // Load user preferences from localStorage
+    loadPreferences() {
+        try {
+            const saved = localStorage.getItem('nvt_preferences');
+            if (!saved) return;
+
+            const prefs = JSON.parse(saved);
+            
+            // Preference mapping: [preference key, desktop element ID, mobile element ID]
+            const prefMappings = [
+                ['showShapes', 'showShapes', 'showShapesMobile'],
+                ['showVehicles', 'showVehicles', 'showVehiclesMobile'],
+                ['showStops', 'showStops', 'showStopsMobile'],
+                ['showAlerts', 'showAlerts', 'showAlertsMobile'],
+                ['showHeatmap', 'showHeatmap', 'showHeatmapMobile']
+            ];
+
+            // Apply preferences to both desktop and mobile checkboxes
+            prefMappings.forEach(([prefKey, desktopId, mobileId]) => {
+                if (prefs[prefKey] !== undefined) {
+                    const desktopEl = document.getElementById(desktopId);
+                    const mobileEl = document.getElementById(mobileId);
+                    
+                    if (desktopEl) desktopEl.checked = prefs[prefKey];
+                    if (mobileEl) mobileEl.checked = prefs[prefKey];
+                }
+            });
+
+            console.log('✅ Preferences loaded');
+        } catch (e) {
+            console.warn('⚠️ Failed to load preferences:', e);
+        }
     }
 
     init() {
@@ -283,6 +342,12 @@ class TBMTransitMap {
     async calculateTransitRoute(startStopId, endStopId) {
         console.log(`🗺️  Calculating route: ${startStopId} → ${endStopId}`);
 
+        // Validate inputs
+        if (startStopId === endStopId) {
+            this.showNotification('⚠️ Start and destination are the same', 'error');
+            return null;
+        }
+
         this.showLoading(true);
 
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -297,12 +362,28 @@ class TBMTransitMap {
             return null;
         }
 
+        // Check if stops have any lines
+        if (!startStop.lines || startStop.lines.length === 0) {
+            this.showLoading(false);
+            this.showNotification('⚠️ Start stop has no transit lines', 'error');
+            return null;
+        }
+
+        if (!endStop.lines || endStop.lines.length === 0) {
+            this.showLoading(false);
+            this.showNotification('⚠️ Destination stop has no transit lines', 'error');
+            return null;
+        }
+
+        console.log(`🔍 Finding routes from "${startStop.stop_name}" to "${endStop.stop_name}"`);
+
         const routes = this.findTransitRoutes(startStop, endStop);
 
         this.showLoading(false);
 
         if (routes.length === 0) {
-            this.showNotification('⚠️ No transit route found', 'error');
+            console.log('❌ No direct or transfer routes found');
+            this.showNotification('⚠️ No transit route found between these stops. Try selecting stops on connected lines.', 'error');
             return null;
         }
 
@@ -312,7 +393,7 @@ class TBMTransitMap {
             return a.distance - b.distance;
         })[0];
 
-        console.log('✅ Best route found:', bestRoute);
+        console.log(`✅ Best route found with ${bestRoute.transfers} transfer(s) and ${routes.length} alternative(s)`);
         this.displayTransitRoute(bestRoute);
         return bestRoute;
     }
@@ -333,10 +414,9 @@ class TBMTransitMap {
         const visited = new Set();
         visited.add(startStop.stop_id);
 
-        const maxIterations = 10000;
         let iterations = 0;
 
-        while (queue.length > 0 && routes.length < 3 && iterations < maxIterations) {
+        while (queue.length > 0 && routes.length < this.MAX_ROUTES_TO_FIND && iterations < this.MAX_ROUTE_ITERATIONS) {
             iterations++;
             const current = queue.shift();
 
@@ -358,7 +438,8 @@ class TBMTransitMap {
                 if (currentIndex === -1) continue;
 
                 const checkIndices = [];
-                for (let i = Math.max(0, currentIndex - 15); i < Math.min(lineStops.length, currentIndex + 15); i++) {
+                // Expanded search range for better route discovery
+                for (let i = Math.max(0, currentIndex - this.ROUTE_SEARCH_RANGE); i < Math.min(lineStops.length, currentIndex + this.ROUTE_SEARCH_RANGE); i++) {
                     if (i !== currentIndex) checkIndices.push(i);
                 }
 
@@ -440,9 +521,26 @@ class TBMTransitMap {
     }
 
     getStopsOnLine(lineRef) {
-        return this.networkData.stops.filter(stop =>
+        const stops = this.networkData.stops.filter(stop =>
             stop.lines && stop.lines.includes(lineRef)
-        ).sort((a, b) => a.stop_sequence - b.stop_sequence || 0);
+        );
+        
+        // If no stops found, return empty array
+        if (stops.length === 0) return [];
+        
+        // Try to sort by stop_sequence if available, otherwise maintain existing order
+        // Note: stop_sequence might not be available in all datasets
+        return stops.sort((a, b) => {
+            const seqA = a.stop_sequence || 0;
+            const seqB = b.stop_sequence || 0;
+            
+            // If both have no sequence, sort by stop_id to maintain consistent ordering
+            if (seqA === 0 && seqB === 0) {
+                return a.stop_id.localeCompare(b.stop_id);
+            }
+            
+            return seqA - seqB;
+        });
     }
 
     getStopsBetween(lineStops, fromIndex, toIndex) {
@@ -464,6 +562,131 @@ class TBMTransitMap {
 
     toRad(degrees) {
         return degrees * Math.PI / 180;
+    }
+
+    /**
+     * Parse GTFS time format (HH:MM:SS) which can have hours > 24 for next-day times
+     * Returns seconds since midnight
+     */
+    parseGTFSTime(timeStr) {
+        if (!timeStr || typeof timeStr !== 'string') return null;
+        
+        const parts = timeStr.split(':');
+        if (parts.length !== 3) return null;
+        
+        const hours = parseInt(parts[0], 10);
+        const minutes = parseInt(parts[1], 10);
+        const seconds = parseInt(parts[2], 10);
+        
+        if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) return null;
+        
+        return hours * this.SECONDS_PER_HOUR + minutes * this.SECONDS_PER_MINUTE + seconds;
+    }
+
+    /**
+     * Convert seconds since midnight to a Date object for today
+     * Handles times > 24 hours (next day)
+     */
+    secondsToDate(seconds) {
+        if (seconds === null) return null;
+        
+        const now = new Date();
+        const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        
+        return new Date(todayMidnight.getTime() + seconds * 1000);
+    }
+
+    /**
+     * Get current time in seconds since midnight
+     */
+    getCurrentTimeInSeconds() {
+        const now = new Date();
+        return now.getHours() * this.SECONDS_PER_HOUR + now.getMinutes() * this.SECONDS_PER_MINUTE + now.getSeconds();
+    }
+
+    /**
+     * Format seconds since midnight to HH:MM format
+     * Note: GTFS allows times > 24 hours for next-day services (e.g., 25:30:00)
+     * We preserve the original hour value to maintain this information
+     */
+    formatGTFSTime(seconds) {
+        if (seconds === null) return 'N/A';
+        
+        const hours = Math.floor(seconds / this.SECONDS_PER_HOUR);
+        const minutes = Math.floor((seconds % this.SECONDS_PER_HOUR) / this.SECONDS_PER_MINUTE);
+        
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    }
+
+    /**
+     * Get scheduled arrivals for a stop from GTFS data
+     * 
+     * @param {string} stopId - The stop ID to get arrivals for
+     * @param {number} maxResults - Maximum number of results to return
+     * @returns {Promise<Array>} Array of scheduled arrival objects
+     */
+    async getScheduledArrivals(stopId, maxResults = 5) {
+        try {
+            const response = await fetch(`${this.apiEndpoint}/stop/${stopId}/schedule`);
+            
+            if (!response.ok) {
+                console.warn(`⚠️ Failed to fetch schedule for stop ${stopId}: ${response.status}`);
+                return [];
+            }
+            
+            const json = await response.json();
+            
+            if (json.success && json.data) {
+                const arrivals = json.data;
+                
+                // Format arrivals for display
+                return arrivals.map(arrival => {
+                    const line = this.networkData.lines.find(l => l.route_id === arrival.route_id);
+                    
+                    // Parse time and calculate minutes until arrival
+                    const timeSeconds = this.parseGTFSTime(arrival.arrival_time);
+                    const currentSeconds = this.getCurrentTimeInSeconds();
+                    
+                    let minutesUntil;
+                    if (timeSeconds >= 86400) {
+                        // Next-day service (e.g., 25:30:00 = 1:30 AM next day)
+                        // Calculate as (time - 24h) - current_time + remaining_today
+                        const nextDaySeconds = timeSeconds - 86400;
+                        const secondsUntilMidnight = 86400 - currentSeconds;
+                        minutesUntil = Math.floor((secondsUntilMidnight + nextDaySeconds) / this.SECONDS_PER_MINUTE);
+                    } else {
+                        // Same-day service
+                        minutesUntil = Math.floor((timeSeconds - currentSeconds) / this.SECONDS_PER_MINUTE);
+                    }
+                    
+                    let timeStr;
+                    if (minutesUntil < 0) {
+                        timeStr = 'Passed';
+                    } else if (minutesUntil === 0) {
+                        timeStr = 'Now';
+                    } else if (minutesUntil < 60) {
+                        timeStr = `${minutesUntil} min`;
+                    } else {
+                        // Show actual time for farther arrivals
+                        timeStr = this.formatGTFSTime(timeSeconds);
+                    }
+                    
+                    return {
+                        lineCode: arrival.line_code,
+                        lineColor: arrival.line_color,
+                        destination: arrival.destination || arrival.stop_headsign || 'Unknown',
+                        timeStr: timeStr,
+                        operator: arrival.operator,
+                        minutes: minutesUntil
+                    };
+                }).filter(a => a.minutes >= 0); // Only show future arrivals
+            }
+            
+            return [];
+        } catch (error) {
+            console.error('❌ Error fetching schedule:', error);
+            return [];
+        }
     }
 
     estimateDuration(segment, line) {
@@ -1749,7 +1972,9 @@ class TBMTransitMap {
 
     createStopPopup(stop) {
         let arrivalsHTML = '';
-        if (stop.real_time && stop.real_time.length > 0) {
+        const hasRealTime = stop.real_time && stop.real_time.length > 0;
+        
+        if (hasRealTime) {
             const sortedArrivals = stop.real_time
                 .filter(rt => rt.timestamp)
                 .sort((a, b) => a.timestamp - b.timestamp)
@@ -1757,7 +1982,7 @@ class TBMTransitMap {
 
             arrivalsHTML = `
                 <div class="popup-section">
-                    <span class="popup-label">🕐 Next Arrivals:</span>
+                    <span class="popup-label">🕐 Next Arrivals (Real-time):</span>
                     ${sortedArrivals.map(rt => {
                         const time = new Date(rt.timestamp * 1000);
                         const now = new Date();
@@ -1786,6 +2011,67 @@ class TBMTransitMap {
                     }).join('')}
                 </div>
             `;
+        } else {
+            // Fetch scheduled arrivals when no real-time data
+            arrivalsHTML = `
+                <div class="popup-section popup-info-message">
+                    <span class="popup-label">⏳ Loading schedule...</span>
+                </div>
+            `;
+            
+            // Fetch and update asynchronously
+            this.getScheduledArrivals(stop.stop_id).then(scheduledArrivals => {
+                if (scheduledArrivals.length > 0) {
+                    const scheduleHTML = `
+                        <div class="popup-section">
+                            <span class="popup-label">📅 Scheduled Arrivals:</span>
+                            ${scheduledArrivals.map(arrival => {
+                                const operatorBadge = this.getOperatorBadge(arrival.operator, true).replace('operator-badge', 'operator-badge" style="margin-left: 8px;');
+                                
+                                return `
+                                    <div class="arrival-item">
+                                        <div>
+                                            <span class="line-badge" style="background-color: #${arrival.lineColor}; display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
+                                                ${arrival.lineCode}
+                                            </span>
+                                            ${operatorBadge}
+                                            → ${arrival.destination}
+                                        </div>
+                                        <div class="arrival-time">${arrival.timeStr}</div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    `;
+                    
+                    // Update popup if it's still open for this stop
+                    if (this.currentPopup) {
+                        const popupElement = this.currentPopup.getElement();
+                        if (popupElement) {
+                            const infoSection = popupElement.querySelector('.popup-info-message');
+                            if (infoSection) {
+                                infoSection.outerHTML = scheduleHTML;
+                            }
+                        }
+                    }
+                } else {
+                    // No schedule data available
+                    if (this.currentPopup) {
+                        const popupElement = this.currentPopup.getElement();
+                        if (popupElement) {
+                            const infoSection = popupElement.querySelector('.popup-info-message');
+                            if (infoSection) {
+                                infoSection.innerHTML = `
+                                    <span class="popup-label">ℹ️ Info:</span>
+                                    No scheduled arrivals available for this stop.
+                                `;
+                            }
+                        }
+                    }
+                }
+            }).catch(error => {
+                console.error('Error loading schedule:', error);
+            });
         }
 
         this.closeCurrentPopup();
@@ -1864,6 +2150,9 @@ class TBMTransitMap {
     }
 
     setupEventListeners() {
+        // Load saved preferences first
+        this.loadPreferences();
+
         const desktopCheckboxes = ['showShapes', 'showVehicles', 'showStops', 'showAlerts', 'showHeatmap'];
         
         desktopCheckboxes.forEach(id => {
@@ -1874,12 +2163,14 @@ class TBMTransitMap {
                 checkbox.addEventListener('change', (e) => {
                     this.map.setLayoutProperty('line-shapes-layer', 'visibility',
                         e.target.checked ? 'visible' : 'none');
+                    this.savePreferences();
                 });
             } else if (id === 'showVehicles') {
                 checkbox.addEventListener('change', (e) => {
                     const visibility = e.target.checked ? 'visible' : 'none';
                     this.map.setLayoutProperty('vehicles-layer', 'visibility', visibility);
                     this.map.setLayoutProperty('vehicles-labels', 'visibility', visibility);
+                    this.savePreferences();
                 });
             } else if (id === 'showStops') {
                 checkbox.addEventListener('change', (e) => {
@@ -1888,6 +2179,7 @@ class TBMTransitMap {
                         this.map.setLayoutProperty('stops-layer', 'visibility', visibility);
                         this.map.setLayoutProperty('stops-labels', 'visibility', visibility);
                     }
+                    this.savePreferences();
                 });
             } else if (id === 'showAlerts') {
                 checkbox.addEventListener('change', (e) => {
@@ -1896,6 +2188,7 @@ class TBMTransitMap {
                     } else {
                         this.map.setFilter('stops-layer', ['==', ['get', 'alerts'], 0]);
                     }
+                    this.savePreferences();
                 });
             } else if (id === 'showHeatmap') {
                 checkbox.addEventListener('change', (e) => {
@@ -1905,6 +2198,7 @@ class TBMTransitMap {
                         e.target.checked ? 'none' : 'visible');
                     this.map.setLayoutProperty('vehicles-labels', 'visibility',
                         e.target.checked ? 'none' : 'visible');
+                    this.savePreferences();
                 });
             }
         });

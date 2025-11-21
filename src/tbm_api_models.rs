@@ -76,6 +76,59 @@ pub struct ShapePoint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StopTime {
+    pub trip_id: String,
+    pub arrival_time: String,
+    pub departure_time: String,
+    pub stop_id: String,
+    pub stop_sequence: u32,
+    pub stop_headsign: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Trip {
+    pub trip_id: String,
+    pub route_id: String,
+    pub service_id: String,
+    pub trip_headsign: Option<String>,
+    pub direction_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceCalendar {
+    pub service_id: String,
+    pub monday: bool,
+    pub tuesday: bool,
+    pub wednesday: bool,
+    pub thursday: bool,
+    pub friday: bool,
+    pub saturday: bool,
+    pub sunday: bool,
+    pub start_date: String,
+    pub end_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalendarDate {
+    pub service_id: String,
+    pub date: String,
+    pub exception_type: u32, // 1 = service added, 2 = service removed
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledArrival {
+    pub trip_id: String,
+    pub route_id: String,
+    pub line_code: String,
+    pub line_color: String,
+    pub arrival_time: String,
+    pub departure_time: String,
+    pub destination: Option<String>,
+    pub stop_headsign: Option<String>,
+    pub operator: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Line {
     pub line_ref: String,
     pub line_name: String,
@@ -106,6 +159,10 @@ pub struct GTFSCache {
     pub stops: Vec<(String, String, f64, f64)>,
     pub shapes: HashMap<String, Vec<ShapePoint>>,
     pub route_to_shapes: HashMap<String, Vec<String>>,
+    pub stop_times: HashMap<String, Vec<StopTime>>, // key: stop_id, value: list of stop times
+    pub trips: HashMap<String, Trip>, // key: trip_id, value: trip info
+    pub calendar: HashMap<String, ServiceCalendar>, // key: service_id
+    pub calendar_dates: HashMap<String, Vec<CalendarDate>>, // key: service_id
     pub cached_at: u64,
     pub source: String, // "TBM" or "TransGironde"
 }
@@ -324,6 +381,10 @@ impl NVTModels {
                 stops: Vec::new(),
                 shapes: HashMap::new(),
                 route_to_shapes: HashMap::new(),
+                stop_times: HashMap::new(),
+                trips: HashMap::new(),
+                calendar: HashMap::new(),
+                calendar_dates: HashMap::new(),
                 cached_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
@@ -344,6 +405,10 @@ impl NVTModels {
                     stops: Vec::new(),
                     shapes: HashMap::new(),
                     route_to_shapes: HashMap::new(),
+                    stop_times: HashMap::new(),
+                    trips: HashMap::new(),
+                    calendar: HashMap::new(),
+                    calendar_dates: HashMap::new(),
                     cached_at: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -366,6 +431,10 @@ impl NVTModels {
                     stops: Vec::new(),
                     shapes: HashMap::new(),
                     route_to_shapes: HashMap::new(),
+                    stop_times: HashMap::new(),
+                    trips: HashMap::new(),
+                    calendar: HashMap::new(),
+                    calendar_dates: HashMap::new(),
                     cached_at: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -547,11 +616,31 @@ impl NVTModels {
         let route_to_shapes = Self::parse_transgironde_trips(&mut archive)?;
         println!("   ✓ Mapped {} routes to shapes", route_to_shapes.len());
 
+        // Parse stop_times.txt for schedule predictions
+        let stop_times = Self::parse_stop_times(&mut archive)?;
+        println!("   ✓ Parsed {} stop time entries", stop_times.values().map(|v| v.len()).sum::<usize>());
+
+        // Parse trips.txt for trip information
+        let trips = Self::parse_trips_info(&mut archive)?;
+        println!("   ✓ Parsed {} trips", trips.len());
+
+        // Parse calendar.txt for service schedules
+        let calendar = Self::parse_calendar(&mut archive)?;
+        println!("   ✓ Parsed {} calendar services", calendar.len());
+
+        // Parse calendar_dates.txt for exceptions
+        let calendar_dates = Self::parse_calendar_dates(&mut archive)?;
+        println!("   ✓ Parsed {} calendar date exceptions", calendar_dates.values().map(|v| v.len()).sum::<usize>());
+
         let gtfs_cache = GTFSCache {
             routes,
             stops: stops_data.clone(),
             shapes: shapes.clone(),
             route_to_shapes: route_to_shapes.clone(),
+            stop_times,
+            trips,
+            calendar,
+            calendar_dates,
             cached_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -703,6 +792,152 @@ impl NVTModels {
         Ok(route_to_shapes)
     }
 
+    fn parse_stop_times(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<HashMap<String, Vec<StopTime>>> {
+        let mut stop_times_map: HashMap<String, Vec<StopTime>> = HashMap::new();
+
+        if let Ok(mut stop_times_file) = archive.by_name("stop_times.txt") {
+            let mut contents = String::new();
+            stop_times_file.read_to_string(&mut contents).ok();
+            drop(stop_times_file);
+
+            let mut rdr = csv::Reader::from_reader(contents.as_bytes());
+
+            for result in rdr.records() {
+                if let Ok(record) = result {
+                    // trip_id,arrival_time,departure_time,stop_id,stop_sequence,stop_headsign,pickup_type,drop_off_type,shape_dist_traveled
+                    if let (Some(trip_id), Some(arrival_time), Some(departure_time), Some(stop_id), Some(stop_sequence)) =
+                        (record.get(0), record.get(1), record.get(2), record.get(3), record.get(4)) {
+                        if let Ok(sequence) = stop_sequence.parse::<u32>() {
+                            let stop_time = StopTime {
+                                trip_id: trip_id.to_string(),
+                                arrival_time: arrival_time.to_string(),
+                                departure_time: departure_time.to_string(),
+                                stop_id: stop_id.to_string(),
+                                stop_sequence: sequence,
+                                stop_headsign: record.get(5).map(|s| s.to_string()).filter(|s| !s.is_empty()),
+                            };
+
+                            stop_times_map.entry(stop_id.to_string())
+                                .or_insert_with(Vec::new)
+                                .push(stop_time);
+                        }
+                    }
+                }
+            }
+
+            // Sort stop times by arrival time for each stop
+            for times in stop_times_map.values_mut() {
+                times.sort_by(|a, b| a.arrival_time.cmp(&b.arrival_time));
+            }
+        }
+
+        Ok(stop_times_map)
+    }
+
+    fn parse_trips_info(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<HashMap<String, Trip>> {
+        let mut trips_map: HashMap<String, Trip> = HashMap::new();
+
+        if let Ok(mut trips_file) = archive.by_name("trips.txt") {
+            let mut contents = String::new();
+            trips_file.read_to_string(&mut contents).ok();
+            drop(trips_file);
+
+            let mut rdr = csv::Reader::from_reader(contents.as_bytes());
+
+            for result in rdr.records() {
+                if let Ok(record) = result {
+                    // route_id,service_id,trip_id,trip_headsign,direction_id,block_id,shape_id,wheelchair_accessible,bikes_allowed
+                    if let (Some(route_id), Some(service_id), Some(trip_id)) =
+                        (record.get(0), record.get(1), record.get(2)) {
+                        let trip = Trip {
+                            trip_id: trip_id.to_string(),
+                            route_id: route_id.to_string(),
+                            service_id: service_id.to_string(),
+                            trip_headsign: record.get(3).map(|s| s.to_string()).filter(|s| !s.is_empty()),
+                            direction_id: record.get(4).and_then(|s| s.parse::<u32>().ok()),
+                        };
+
+                        trips_map.insert(trip_id.to_string(), trip);
+                    }
+                }
+            }
+        }
+
+        Ok(trips_map)
+    }
+
+    fn parse_calendar(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<HashMap<String, ServiceCalendar>> {
+        let mut calendar_map: HashMap<String, ServiceCalendar> = HashMap::new();
+
+        if let Ok(mut calendar_file) = archive.by_name("calendar.txt") {
+            let mut contents = String::new();
+            calendar_file.read_to_string(&mut contents).ok();
+            drop(calendar_file);
+
+            let mut rdr = csv::Reader::from_reader(contents.as_bytes());
+
+            for result in rdr.records() {
+                if let Ok(record) = result {
+                    // service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+                    if let (Some(service_id), Some(mon), Some(tue), Some(wed), Some(thu), Some(fri), Some(sat), Some(sun), Some(start), Some(end)) =
+                        (record.get(0), record.get(1), record.get(2), record.get(3), record.get(4), record.get(5), record.get(6), record.get(7), record.get(8), record.get(9)) {
+                        
+                        let calendar = ServiceCalendar {
+                            service_id: service_id.to_string(),
+                            monday: mon == "1",
+                            tuesday: tue == "1",
+                            wednesday: wed == "1",
+                            thursday: thu == "1",
+                            friday: fri == "1",
+                            saturday: sat == "1",
+                            sunday: sun == "1",
+                            start_date: start.to_string(),
+                            end_date: end.to_string(),
+                        };
+
+                        calendar_map.insert(service_id.to_string(), calendar);
+                    }
+                }
+            }
+        }
+
+        Ok(calendar_map)
+    }
+
+    fn parse_calendar_dates(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<HashMap<String, Vec<CalendarDate>>> {
+        let mut calendar_dates_map: HashMap<String, Vec<CalendarDate>> = HashMap::new();
+
+        if let Ok(mut calendar_dates_file) = archive.by_name("calendar_dates.txt") {
+            let mut contents = String::new();
+            calendar_dates_file.read_to_string(&mut contents).ok();
+            drop(calendar_dates_file);
+
+            let mut rdr = csv::Reader::from_reader(contents.as_bytes());
+
+            for result in rdr.records() {
+                if let Ok(record) = result {
+                    // service_id,date,exception_type
+                    if let (Some(service_id), Some(date), Some(exception_type)) =
+                        (record.get(0), record.get(1), record.get(2)) {
+                        if let Ok(exc_type) = exception_type.parse::<u32>() {
+                            let calendar_date = CalendarDate {
+                                service_id: service_id.to_string(),
+                                date: date.to_string(),
+                                exception_type: exc_type,
+                            };
+
+                            calendar_dates_map.entry(service_id.to_string())
+                                .or_insert_with(Vec::new)
+                                .push(calendar_date);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(calendar_dates_map)
+    }
+
     fn parse_transgironde_from_cache(cache: GTFSCache) -> Result<(Vec<Stop>, Vec<Line>, GTFSCache)> {
         let mut stops = Vec::new();
         let mut stops_by_parent: HashMap<String, Vec<String>> = HashMap::new();
@@ -797,11 +1032,31 @@ impl NVTModels {
         let route_to_shapes = Self::parse_sncf_trips(&mut archive)?;
         println!("   ✓ Mapped {} routes to shapes", route_to_shapes.len());
 
+        // Parse stop_times.txt for schedule predictions
+        let stop_times = Self::parse_stop_times(&mut archive)?;
+        println!("   ✓ Parsed {} stop time entries", stop_times.values().map(|v| v.len()).sum::<usize>());
+
+        // Parse trips.txt for trip information
+        let trips = Self::parse_trips_info(&mut archive)?;
+        println!("   ✓ Parsed {} trips", trips.len());
+
+        // Parse calendar.txt for service schedules
+        let calendar = Self::parse_calendar(&mut archive)?;
+        println!("   ✓ Parsed {} calendar services", calendar.len());
+
+        // Parse calendar_dates.txt for exceptions
+        let calendar_dates = Self::parse_calendar_dates(&mut archive)?;
+        println!("   ✓ Parsed {} calendar date exceptions", calendar_dates.values().map(|v| v.len()).sum::<usize>());
+
         let gtfs_cache = GTFSCache {
             routes,
             stops: stops_data.clone(),
             shapes: shapes.clone(),
             route_to_shapes: route_to_shapes.clone(),
+            stop_times,
+            trips,
+            calendar,
+            calendar_dates,
             cached_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1471,11 +1726,31 @@ impl NVTModels {
             }
         }
 
+        // Parse stop_times.txt for schedule predictions
+        let stop_times = Self::parse_stop_times(&mut archive)?;
+        println!("✓ Parsed {} stop time entries", stop_times.values().map(|v| v.len()).sum::<usize>());
+
+        // Parse trips.txt for trip information
+        let trips = Self::parse_trips_info(&mut archive)?;
+        println!("✓ Parsed {} trips", trips.len());
+
+        // Parse calendar.txt for service schedules
+        let calendar = Self::parse_calendar(&mut archive)?;
+        println!("✓ Parsed {} calendar services", calendar.len());
+
+        // Parse calendar_dates.txt for exceptions
+        let calendar_dates = Self::parse_calendar_dates(&mut archive)?;
+        println!("✓ Parsed {} calendar date exceptions", calendar_dates.values().map(|v| v.len()).sum::<usize>());
+
         let cache = GTFSCache {
             routes: color_map.clone(),
             stops: stops_data,
             shapes: shapes_map,
             route_to_shapes,
+            stop_times,
+            trips,
+            calendar,
+            calendar_dates,
             cached_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1794,5 +2069,165 @@ impl NVTModels {
             dynamic_age,
             Self::format_timestamp_full(cache.last_dynamic_update as i64)
         )
+    }
+
+    /// Get scheduled arrivals for a stop based on GTFS data
+    pub fn get_scheduled_arrivals(
+        stop_id: &str,
+        cache: &CachedNetworkData,
+        max_results: usize,
+    ) -> Vec<ScheduledArrival> {
+        use chrono::{Local, Datelike, Timelike};
+        
+        const SECONDS_PER_HOUR: u32 = 3600;
+        const SECONDS_PER_MINUTE: u32 = 60;
+        const SECONDS_IN_DAY: u32 = 86400;
+        const LATE_EVENING_THRESHOLD: u32 = 79200; // 22:00:00
+        
+        let now = Local::now();
+        let today_date = format!("{}{:02}{:02}", now.year(), now.month(), now.day());
+        let current_seconds = now.hour() * SECONDS_PER_HOUR + now.minute() * SECONDS_PER_MINUTE + now.second();
+        
+        let weekday_num = now.weekday().num_days_from_monday(); // 0 = Monday, 6 = Sunday
+        
+        let mut scheduled_arrivals = Vec::new();
+        
+        // Check all three GTFS caches
+        let gtfs_caches = vec![
+            (&cache.tbm_gtfs_cache, "TBM"),
+            (&cache.transgironde_gtfs_cache, "TransGironde"),
+            (&cache.sncf_gtfs_cache, "SNCF"),
+        ];
+        
+        for (gtfs_cache, operator) in gtfs_caches {
+            // Get stop times for this stop
+            if let Some(stop_times) = gtfs_cache.stop_times.get(stop_id) {
+                for stop_time in stop_times {
+                    // Get trip info
+                    if let Some(trip) = gtfs_cache.trips.get(&stop_time.trip_id) {
+                        // Check if service is active today
+                        if !Self::is_service_active(
+                            &trip.service_id,
+                            &today_date,
+                            weekday_num,
+                            &gtfs_cache.calendar,
+                            &gtfs_cache.calendar_dates,
+                        ) {
+                            continue;
+                        }
+                        
+                        // Parse arrival time
+                        if let Some(arrival_seconds) = Self::parse_gtfs_time(&stop_time.arrival_time) {
+                            // Handle next-day services (times >= 24:00:00)
+                            // Only include future arrivals within the next 2 hours window
+                            let is_future = if arrival_seconds >= SECONDS_IN_DAY {
+                                // Next-day service (e.g., 25:30:00)
+                                // Only show if current time is late enough (e.g., after 22:00)
+                                current_seconds >= LATE_EVENING_THRESHOLD
+                            } else {
+                                // Same-day service
+                                arrival_seconds >= current_seconds
+                            };
+                            
+                            if is_future {
+                                // Get line info
+                                let line_color = gtfs_cache.routes.get(&trip.route_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| "808080".to_string());
+                                
+                                // Extract line code from route_id
+                                let line_code = Self::extract_line_code_from_route(&trip.route_id, operator);
+                                
+                                scheduled_arrivals.push(ScheduledArrival {
+                                    trip_id: stop_time.trip_id.clone(),
+                                    route_id: trip.route_id.clone(),
+                                    line_code,
+                                    line_color,
+                                    arrival_time: stop_time.arrival_time.clone(),
+                                    departure_time: stop_time.departure_time.clone(),
+                                    destination: trip.trip_headsign.clone(),
+                                    stop_headsign: stop_time.stop_headsign.clone(),
+                                    operator: operator.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Sort by arrival time and take top results
+        scheduled_arrivals.sort_by(|a, b| a.arrival_time.cmp(&b.arrival_time));
+        scheduled_arrivals.truncate(max_results);
+        scheduled_arrivals
+    }
+    
+    /// Check if a service is active on a given date
+    fn is_service_active(
+        service_id: &str,
+        date: &str,
+        weekday: u32,
+        calendar: &HashMap<String, ServiceCalendar>,
+        calendar_dates: &HashMap<String, Vec<CalendarDate>>,
+    ) -> bool {
+        // First check calendar_dates for exceptions
+        if let Some(exceptions) = calendar_dates.get(service_id) {
+            for exception in exceptions {
+                if exception.date == date {
+                    // exception_type: 1 = service added, 2 = service removed
+                    return exception.exception_type == 1;
+                }
+            }
+        }
+        
+        // Check regular calendar
+        if let Some(cal) = calendar.get(service_id) {
+            // Check if date is within service period
+            if date < cal.start_date.as_str() || date > cal.end_date.as_str() {
+                return false;
+            }
+            
+            // Check day of week
+            return match weekday {
+                0 => cal.monday,
+                1 => cal.tuesday,
+                2 => cal.wednesday,
+                3 => cal.thursday,
+                4 => cal.friday,
+                5 => cal.saturday,
+                6 => cal.sunday,
+                _ => false,
+            };
+        }
+        
+        false
+    }
+    
+    /// Parse GTFS time format (HH:MM:SS) to seconds since midnight
+    fn parse_gtfs_time(time_str: &str) -> Option<u32> {
+        let parts: Vec<&str> = time_str.split(':').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        
+        let hours: u32 = parts[0].parse().ok()?;
+        let minutes: u32 = parts[1].parse().ok()?;
+        let seconds: u32 = parts[2].parse().ok()?;
+        
+        Some(hours * 3600 + minutes * 60 + seconds)
+    }
+    
+    /// Extract line code from route ID for display
+    fn extract_line_code_from_route(route_id: &str, operator: &str) -> String {
+        if operator == "TBM" {
+            // TBM format: extract last part
+            route_id.split(':').last().unwrap_or(route_id).to_string()
+        } else if operator == "TransGironde" {
+            // TransGironde format: GIRONDE:Line:XXXX -> XXXX
+            route_id.split(':').last().unwrap_or(route_id).to_string()
+        } else {
+            // SNCF and others: use as is
+            route_id.to_string()
+        }
     }
 }
