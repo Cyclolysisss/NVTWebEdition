@@ -1,1 +1,0 @@
-/home/ubuntu/NVTWebEdition/target/release/NVTWebEdition: /home/ubuntu/NVTWebEdition/src/main.rs /home/ubuntu/NVTWebEdition/src/tbm_api_models.rs /home/ubuntu/NVTWebEdition/static/nvtweb.html /home/ubuntu/NVTWebEdition/static/tbm-transit.js

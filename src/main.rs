@@ -1,9 +1,8 @@
 // Backend API server with embedded frontend
 // TBM + TransGironde Transit API Server with integrated web UI
 
-use actix_web::{web, App, HttpServer, HttpResponse, middleware, HttpRequest};
+use actix_web::{web, App, HttpServer, HttpResponse, middleware};
 use actix_cors::Cors;
-use actix_files as fs;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,7 +13,7 @@ use tbm_api_models::{NVTModels, CachedNetworkData};
 
 // Embed static files at compile time
 const INDEX_HTML: &str = include_str!("../static/nvtweb.html");
-const TRANSIT_JS: &str = include_str!("../static/tbm-transit.js");
+const TRANSIT_JS: &str = include_str!("../static/tbm-transit-no-key.js");
 
 #[derive(Clone)]
 struct AppState {
@@ -37,7 +36,7 @@ impl<T: Serialize> ApiResponse<T> {
             data: Some(data),
             error: None,
             timestamp: NVTModels::get_current_timestamp(),
-            sources: vec!["TBM".to_string(), "TransGironde".to_string()],
+            sources: vec!["TBM".to_string(), "TransGironde".to_string(), "SNCF".to_string()],
         }
     }
 
@@ -314,9 +313,9 @@ async fn get_operators(state: web::Data<AppState>) -> HttpResponse {
 async fn health_check() -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "healthy",
-        "service": "TBM + TransGironde Transit API",
-        "version": "1.1.0",
-        "sources": ["TBM", "TransGironde"],
+        "service": "TBM + TransGironde + SNCF Transit API",
+        "version": "1.2.0",
+        "sources": ["TBM", "TransGironde", "SNCF"],
         "timestamp": NVTModels::get_current_timestamp(),
         "embedded_frontend": true
     }))
@@ -406,7 +405,7 @@ async fn run_server(cache: CachedNetworkData) -> std::io::Result<()> {
     });
 
     println!("\n╔════════════════════════════════════════════════════════════╗");
-    println!("║   🚀 TBM + TransGironde Transit Server (Embedded UI)      ║");
+    println!("║  🚀 TBM + TransGironde + SNCF Transit Server (Embedded UI)║");
     println!("╚════════════════════════════════════════════════════════════╝\n");
     println!("🌐 Server running on: http://0.0.0.0:8080");
     println!("📱 Web UI available at: http://localhost:8080");
@@ -484,17 +483,17 @@ async fn run_server(cache: CachedNetworkData) -> std::io::Result<()> {
 fn main() -> std::io::Result<()> {
     println!("\n╔════════════════════════════════════════════════════════════╗");
     println!("║                                                            ║");
-    println!("║    🚀 TBM + TransGironde Transit Server                    ║");
+    println!("║    🚀 TBM + TransGironde + SNCF Transit Server             ║");
     println!("║       with Embedded Web UI                                ║");
     println!("║                                                            ║");
-    println!("║    Version: 1.1.0                                          ║");
+    println!("║    Version: 1.2.0                                          ║");
     println!("║    User: Cyclolysisss                                      ║");
-    println!("║    Date: 2025-11-18 09:49:20                               ║");
+    println!("║    Date: 2025-11-21 10:54:00                               ║");
     println!("║                                                            ║");
     println!("╚════════════════════════════════════════════════════════════╝\n");
 
     println!("📡 Initializing network data cache...");
-    println!("   This includes both TBM and TransGironde data...\n");
+    println!("   This includes TBM, TransGironde, and SNCF data...\n");
 
     let cache = match NVTModels::initialize_cache() {
         Ok(cache) => {

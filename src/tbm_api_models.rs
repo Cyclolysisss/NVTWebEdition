@@ -197,6 +197,11 @@ pub struct CachedNetworkData {
     pub transgironde_lines: Vec<Line>,
     pub transgironde_gtfs_cache: GTFSCache,
 
+    // SNCF Data
+    pub sncf_stops: Vec<Stop>,
+    pub sncf_lines: Vec<Line>,
+    pub sncf_gtfs_cache: GTFSCache,
+
     pub last_static_update: u64,
     pub alerts: Vec<AlertInfo>,
     pub real_time: Vec<RealTimeInfo>,
@@ -225,6 +230,9 @@ impl CachedNetworkData {
         // Add TransGironde stops
         all_stops.extend(self.transgironde_stops.clone());
 
+        // Add SNCF stops
+        all_stops.extend(self.sncf_stops.clone());
+
         let mut all_lines = NVTModels::build_lines(
             self.tbm_lines_metadata.clone(),
             self.alerts.clone(),
@@ -235,9 +243,13 @@ impl CachedNetworkData {
         // Add TransGironde lines
         all_lines.extend(self.transgironde_lines.clone());
 
+        // Add SNCF lines
+        all_lines.extend(self.sncf_lines.clone());
+
         // Combine shapes
         let mut all_shapes = self.tbm_gtfs_cache.shapes.clone();
         all_shapes.extend(self.transgironde_gtfs_cache.shapes.clone());
+        all_shapes.extend(self.sncf_gtfs_cache.shapes.clone());
 
         NetworkData {
             stops: all_stops,
@@ -282,6 +294,9 @@ impl NVTModels {
     const API_KEY: &'static str = "opendata-bordeaux-metropole-flux-gtfs-rt";
     const BASE_URL: &'static str = "https://bdx.mecatran.com/utw/ws";
     const TRANSGIRONDE_GTFS_URL: &'static str = "https://www.pigma.org/public/opendata/nouvelle_aquitaine_mobilites/publication/gironde-aggregated-gtfs.zip";
+    const SNCF_GTFS_URL: &'static str = "https://eu.ftp.opendatasoft.com/sncf/plandata/Export_OpenData_SNCF_GTFS_NewTripId.zip";
+    const SNCF_GTFS_RT_TRIP_UPDATES_URL: &'static str = "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-trip-updates";
+    const SNCF_GTFS_RT_SERVICE_ALERTS_URL: &'static str = "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-service-alerts";
     const STATIC_DATA_MAX_AGE: u64 = 3600;
     const REQUEST_TIMEOUT_SECS: u64 = 30;
 
@@ -340,6 +355,28 @@ impl NVTModels {
         println!("   ✓ Loaded {} TransGironde lines", transgironde_lines.len());
         println!("   ✓ Loaded {} TransGironde shapes", transgironde_gtfs_cache.shapes.len());
 
+        // Load SNCF data
+        println!("\n🚄 Loading SNCF data...");
+        let (sncf_stops, sncf_lines, sncf_gtfs_cache) =
+            Self::load_sncf_data().unwrap_or_else(|e| {
+                println!("   ⚠️  Warning: Could not load SNCF data ({})", e);
+                println!("   Continuing without SNCF...");
+                (Vec::new(), Vec::new(), GTFSCache {
+                    routes: HashMap::new(),
+                    stops: Vec::new(),
+                    shapes: HashMap::new(),
+                    route_to_shapes: HashMap::new(),
+                    cached_at: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    source: "SNCF".to_string(),
+                })
+            });
+        println!("   ✓ Loaded {} SNCF stops", sncf_stops.len());
+        println!("   ✓ Loaded {} SNCF lines", sncf_lines.len());
+        println!("   ✓ Loaded {} SNCF shapes", sncf_gtfs_cache.shapes.len());
+
         // Load real-time data
         println!("\n📡 Loading real-time data...");
         let alerts = Self::fetch_alerts().unwrap_or_else(|e| {
@@ -368,6 +405,7 @@ impl NVTModels {
         println!("\n✓ Cache initialized successfully!");
         println!("  • TBM: {} stops, {} lines", tbm_stops.len(), tbm_lines.len());
         println!("  • TransGironde: {} stops, {} lines", transgironde_stops.len(), transgironde_lines.len());
+        println!("  • SNCF: {} stops, {} lines", sncf_stops.len(), sncf_lines.len());
         println!("  • {} vehicles tracked, {} alerts", real_time.len(), alerts.len());
 
         Ok(CachedNetworkData {
@@ -377,6 +415,9 @@ impl NVTModels {
             transgironde_stops,
             transgironde_lines,
             transgironde_gtfs_cache,
+            sncf_stops,
+            sncf_lines,
+            sncf_gtfs_cache,
             last_static_update: now,
             alerts,
             real_time,
@@ -426,6 +467,16 @@ impl NVTModels {
         cache.transgironde_stops = transgironde_stops;
         cache.transgironde_lines = transgironde_lines;
         cache.transgironde_gtfs_cache = transgironde_gtfs_cache;
+
+        let (sncf_stops, sncf_lines, sncf_gtfs_cache) =
+            Self::load_sncf_data()
+                .unwrap_or((cache.sncf_stops.clone(),
+                            cache.sncf_lines.clone(),
+                            cache.sncf_gtfs_cache.clone()));
+
+        cache.sncf_stops = sncf_stops;
+        cache.sncf_lines = sncf_lines;
+        cache.sncf_gtfs_cache = sncf_gtfs_cache;
 
         cache.last_static_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -691,6 +742,270 @@ impl NVTModels {
                 color: color.clone(),
                 shape_ids,
                 operator: "TransGironde".to_string(),
+            });
+        }
+
+        Ok((stops, lines, cache))
+    }
+
+    // ============================================================================
+    // SNCF GTFS Loading
+    // ============================================================================
+
+    fn load_sncf_data() -> Result<(Vec<Stop>, Vec<Line>, GTFSCache)> {
+        if let Some(cache) = GTFSCache::load("SNCF", 30) {
+            return Self::parse_sncf_from_cache(cache);
+        }
+
+        println!("📥 Downloading SNCF GTFS data...");
+
+        let client = blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS * 3)) // Longer timeout for large file
+            .build()
+            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+
+        let response = client.get(Self::SNCF_GTFS_URL)
+            .send()
+            .map_err(|e| NVTError::NetworkError(format!("Failed to download SNCF GTFS: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(NVTError::NetworkError(format!("Download failed with status: {}", response.status())));
+        }
+
+        let zip_bytes = response.bytes()
+            .map_err(|e| NVTError::NetworkError(format!("Failed to read GTFS zip: {}", e)))?;
+
+        println!("✓ Downloaded {} MB, extracting...", zip_bytes.len() / 1024 / 1024);
+
+        let cursor = Cursor::new(zip_bytes);
+        let mut archive = ZipArchive::new(cursor)
+            .map_err(|e| NVTError::ParseError(format!("Failed to open GTFS zip: {}", e)))?;
+
+        // Parse routes.txt
+        let routes = Self::parse_sncf_routes(&mut archive)?;
+        println!("   ✓ Parsed {} SNCF routes", routes.len());
+
+        // Parse stops.txt
+        let stops_data = Self::parse_sncf_stops(&mut archive)?;
+        println!("   ✓ Parsed {} SNCF stops", stops_data.len());
+
+        // Parse shapes.txt
+        let shapes = Self::parse_sncf_shapes(&mut archive)?;
+        println!("   ✓ Parsed {} SNCF shapes", shapes.len());
+
+        // Parse trips.txt to map routes to shapes
+        let route_to_shapes = Self::parse_sncf_trips(&mut archive)?;
+        println!("   ✓ Mapped {} routes to shapes", route_to_shapes.len());
+
+        let gtfs_cache = GTFSCache {
+            routes,
+            stops: stops_data.clone(),
+            shapes: shapes.clone(),
+            route_to_shapes: route_to_shapes.clone(),
+            cached_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            source: "SNCF".to_string(),
+        };
+
+        if let Err(e) = gtfs_cache.save() {
+            eprintln!("⚠️  Warning: Could not save SNCF cache: {}", e);
+        }
+
+        Self::parse_sncf_from_cache(gtfs_cache)
+    }
+
+    fn parse_sncf_routes(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<HashMap<String, String>> {
+        let mut routes_file = archive.by_name("routes.txt")
+            .map_err(|e| NVTError::FileError(format!("routes.txt not found: {}", e)))?;
+
+        let mut routes_contents = String::new();
+        routes_file.read_to_string(&mut routes_contents)
+            .map_err(|e| NVTError::FileError(format!("Failed to read routes.txt: {}", e)))?;
+
+        drop(routes_file);
+
+        let mut color_map = HashMap::new();
+        let mut rdr = csv::Reader::from_reader(routes_contents.as_bytes());
+
+        for result in rdr.records() {
+            if let Ok(record) = result {
+                // route_id, route_short_name, route_long_name, ..., route_color
+                if let (Some(route_id), Some(route_color)) = (record.get(0), record.get(7)) {
+                    if !route_color.is_empty() && route_color.len() == 6 {
+                        color_map.insert(route_id.to_string(), route_color.to_string());
+                    }
+                }
+            }
+        }
+
+        Ok(color_map)
+    }
+
+    fn extract_sncf_stop_id(full_id: &str) -> Option<String> {
+        // SNCF stop_id format: "StopPoint:OCETGV INOUI-87192039" -> "87192039"
+        // or "StopPoint:OCETrain TER-71793150" -> "71793150"
+        if let Some(dash_pos) = full_id.rfind('-') {
+            Some(full_id[dash_pos + 1..].to_string())
+        } else {
+            Some(full_id.to_string())
+        }
+    }
+
+    fn parse_sncf_stops(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<Vec<(String, String, f64, f64)>> {
+        let mut stops_file = archive.by_name("stops.txt")
+            .map_err(|e| NVTError::FileError(format!("stops.txt not found: {}", e)))?;
+
+        let mut stops_contents = String::new();
+        stops_file.read_to_string(&mut stops_contents)
+            .map_err(|e| NVTError::FileError(format!("Failed to read stops.txt: {}", e)))?;
+
+        drop(stops_file);
+
+        let mut stops_data = Vec::new();
+        let mut rdr = csv::Reader::from_reader(stops_contents.as_bytes());
+
+        for result in rdr.records() {
+            if let Ok(record) = result {
+                // stop_id, stop_code, stop_name, stop_desc, stop_lat, stop_lon, ..., location_type
+                if let (Some(stop_id), Some(stop_name), Some(lat_str), Some(lon_str)) =
+                    (record.get(0), record.get(2), record.get(4), record.get(5)) {
+
+                    // Check location_type if available (0 = stop/platform, 1 = station)
+                    let location_type = record.get(9).unwrap_or("0");
+                    
+                    // Skip parent stations (location_type = 1)
+                    if location_type == "1" {
+                        continue;
+                    }
+
+                    if let (Ok(lat), Ok(lon)) = (lat_str.parse::<f64>(), lon_str.parse::<f64>()) {
+                        if lat != 0.0 && lon != 0.0 {
+                            // Extract the simplified stop ID
+                            if let Some(simplified_id) = Self::extract_sncf_stop_id(stop_id) {
+                                stops_data.push((
+                                    simplified_id,
+                                    stop_name.to_string(),
+                                    lat,
+                                    lon,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(stops_data)
+    }
+
+    fn parse_sncf_shapes(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<HashMap<String, Vec<ShapePoint>>> {
+        let mut shapes_map: HashMap<String, Vec<ShapePoint>> = HashMap::new();
+
+        if let Ok(mut shapes_file) = archive.by_name("shapes.txt") {
+            let mut shapes_contents = String::new();
+            shapes_file.read_to_string(&mut shapes_contents).ok();
+            drop(shapes_file);
+
+            let mut shapes_rdr = csv::Reader::from_reader(shapes_contents.as_bytes());
+
+            for result in shapes_rdr.records() {
+                if let Ok(record) = result {
+                    if let (Some(shape_id), Some(lat_str), Some(lon_str), Some(seq_str)) =
+                        (record.get(0), record.get(1), record.get(2), record.get(3)) {
+                        if let (Ok(lat), Ok(lon), Ok(seq)) =
+                            (lat_str.parse::<f64>(), lon_str.parse::<f64>(), seq_str.parse::<u32>()) {
+
+                            shapes_map.entry(shape_id.to_string())
+                                .or_insert_with(Vec::new)
+                                .push(ShapePoint {
+                                    latitude: lat,
+                                    longitude: lon,
+                                    sequence: seq,
+                                });
+                        }
+                    }
+                }
+            }
+
+            for points in shapes_map.values_mut() {
+                points.sort_by_key(|p| p.sequence);
+            }
+        }
+
+        Ok(shapes_map)
+    }
+
+    fn parse_sncf_trips(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<HashMap<String, Vec<String>>> {
+        let mut route_to_shapes: HashMap<String, Vec<String>> = HashMap::new();
+
+        if let Ok(mut trips_file) = archive.by_name("trips.txt") {
+            let mut trips_contents = String::new();
+            trips_file.read_to_string(&mut trips_contents).ok();
+            drop(trips_file);
+
+            let mut trips_rdr = csv::Reader::from_reader(trips_contents.as_bytes());
+
+            for result in trips_rdr.records() {
+                if let Ok(record) = result {
+                    // route_id is typically field 0, shape_id varies by GTFS spec
+                    if let (Some(route_id), Some(shape_id)) = (record.get(0), record.get(7)) {
+                        if !shape_id.is_empty() {
+                            route_to_shapes.entry(route_id.to_string())
+                                .or_insert_with(Vec::new)
+                                .push(shape_id.to_string());
+                        }
+                    }
+                }
+            }
+
+            for shape_ids in route_to_shapes.values_mut() {
+                shape_ids.sort();
+                shape_ids.dedup();
+            }
+        }
+
+        Ok(route_to_shapes)
+    }
+
+    fn parse_sncf_from_cache(cache: GTFSCache) -> Result<(Vec<Stop>, Vec<Line>, GTFSCache)> {
+        let mut stops = Vec::new();
+
+        // Create stops
+        for (stop_id, stop_name, lat, lon) in &cache.stops {
+            stops.push(Stop {
+                stop_id: stop_id.clone(),
+                stop_name: stop_name.clone(),
+                latitude: *lat,
+                longitude: *lon,
+                lines: Vec::new(),
+                alerts: Vec::new(),
+                real_time: Vec::new(),
+            });
+        }
+
+        // Create lines from routes
+        let mut lines = Vec::new();
+        for (route_id, color) in &cache.routes {
+            // Extract route short name from route_id for display
+            let line_code = route_id.split(':').last().unwrap_or(route_id);
+
+            let shape_ids = cache.route_to_shapes.get(route_id)
+                .cloned()
+                .unwrap_or_default();
+
+            lines.push(Line {
+                line_ref: route_id.clone(),
+                line_name: format!("SNCF {}", line_code),
+                line_code: line_code.to_string(),
+                route_id: route_id.clone(),
+                destinations: Vec::new(),
+                alerts: Vec::new(),
+                real_time: Vec::new(),
+                color: color.clone(),
+                shape_ids,
+                operator: "SNCF".to_string(),
             });
         }
 
@@ -1454,8 +1769,10 @@ impl NVTModels {
             "📊 Cache Statistics:\n\
              • TBM: {} stops, {} lines\n\
              • TransGironde: {} stops, {} lines\n\
+             • SNCF: {} stops, {} lines\n\
              • TBM Colors: {} | TBM Shapes: {}\n\
              • TransGironde Colors: {} | TransGironde Shapes: {}\n\
+             • SNCF Colors: {} | SNCF Shapes: {}\n\
              • Vehicles tracked: {} | Alerts: {}\n\
              • Static data age: {}s | Dynamic data age: {}s\n\
              • Last update: {}",
@@ -1463,10 +1780,14 @@ impl NVTModels {
             cache.tbm_lines_metadata.len(),
             cache.transgironde_stops.len(),
             cache.transgironde_lines.len(),
+            cache.sncf_stops.len(),
+            cache.sncf_lines.len(),
             cache.tbm_gtfs_cache.routes.len(),
             cache.tbm_gtfs_cache.shapes.len(),
             cache.transgironde_gtfs_cache.routes.len(),
             cache.transgironde_gtfs_cache.shapes.len(),
+            cache.sncf_gtfs_cache.routes.len(),
+            cache.sncf_gtfs_cache.shapes.len(),
             cache.real_time.len(),
             cache.alerts.len(),
             static_age,
