@@ -30,6 +30,11 @@ class TBMTransitMap {
         this.isUpdating = false;
         this.updateQueue = [];
 
+        // Route planning configuration
+        this.MAX_ROUTE_ITERATIONS = 20000;
+        this.ROUTE_SEARCH_RANGE = 25;
+        this.MAX_ROUTES_TO_FIND = 5;
+
         // Enhanced line type classification with TransGironde and SNCF support
         this.lineTypes = {
             tram: {
@@ -333,11 +338,9 @@ class TBMTransitMap {
         const visited = new Set();
         visited.add(startStop.stop_id);
 
-        const maxIterations = 20000; // Increased from 10000
         let iterations = 0;
-        const searchRange = 25; // Increased from 15 for better coverage
 
-        while (queue.length > 0 && routes.length < 5 && iterations < maxIterations) {
+        while (queue.length > 0 && routes.length < this.MAX_ROUTES_TO_FIND && iterations < this.MAX_ROUTE_ITERATIONS) {
             iterations++;
             const current = queue.shift();
 
@@ -360,7 +363,7 @@ class TBMTransitMap {
 
                 const checkIndices = [];
                 // Expanded search range for better route discovery
-                for (let i = Math.max(0, currentIndex - searchRange); i < Math.min(lineStops.length, currentIndex + searchRange); i++) {
+                for (let i = Math.max(0, currentIndex - this.ROUTE_SEARCH_RANGE); i < Math.min(lineStops.length, currentIndex + this.ROUTE_SEARCH_RANGE); i++) {
                     if (i !== currentIndex) checkIndices.push(i);
                 }
 
@@ -483,6 +486,76 @@ class TBMTransitMap {
 
     toRad(degrees) {
         return degrees * Math.PI / 180;
+    }
+
+    /**
+     * Parse GTFS time format (HH:MM:SS) which can have hours > 24 for next-day times
+     * Returns seconds since midnight
+     */
+    parseGTFSTime(timeStr) {
+        if (!timeStr || typeof timeStr !== 'string') return null;
+        
+        const parts = timeStr.split(':');
+        if (parts.length !== 3) return null;
+        
+        const hours = parseInt(parts[0], 10);
+        const minutes = parseInt(parts[1], 10);
+        const seconds = parseInt(parts[2], 10);
+        
+        if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) return null;
+        
+        return hours * 3600 + minutes * 60 + seconds;
+    }
+
+    /**
+     * Convert seconds since midnight to a Date object for today
+     * Handles times > 24 hours (next day)
+     */
+    secondsToDate(seconds) {
+        if (seconds === null) return null;
+        
+        const now = new Date();
+        const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        
+        return new Date(todayMidnight.getTime() + seconds * 1000);
+    }
+
+    /**
+     * Get current time in seconds since midnight
+     */
+    getCurrentTimeInSeconds() {
+        const now = new Date();
+        return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    }
+
+    /**
+     * Format seconds since midnight to HH:MM format
+     */
+    formatGTFSTime(seconds) {
+        if (seconds === null) return 'N/A';
+        
+        const hours = Math.floor(seconds / 3600) % 24;
+        const minutes = Math.floor((seconds % 3600) / 60);
+        
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    }
+
+    /**
+     * Get scheduled arrivals for a stop from GTFS data
+     * This would need to be called with schedule data from the backend
+     */
+    getScheduledArrivals(stopId, maxResults = 5) {
+        // This is a placeholder for when we have schedule data from the backend
+        // In a full implementation, this would:
+        // 1. Get current day of week and date
+        // 2. Check calendar.txt to find active services
+        // 3. Check calendar_dates.txt for exceptions
+        // 4. Filter stop_times for this stop and active services
+        // 5. Find upcoming arrivals based on current time
+        // 6. Return sorted list of next arrivals
+        
+        console.log('📅 Schedule prediction placeholder - backend integration needed for stop:', stopId);
+        return [];
     }
 
     estimateDuration(segment, line) {
@@ -1768,7 +1841,9 @@ class TBMTransitMap {
 
     createStopPopup(stop) {
         let arrivalsHTML = '';
-        if (stop.real_time && stop.real_time.length > 0) {
+        const hasRealTime = stop.real_time && stop.real_time.length > 0;
+        
+        if (hasRealTime) {
             const sortedArrivals = stop.real_time
                 .filter(rt => rt.timestamp)
                 .sort((a, b) => a.timestamp - b.timestamp)
@@ -1776,7 +1851,7 @@ class TBMTransitMap {
 
             arrivalsHTML = `
                 <div class="popup-section">
-                    <span class="popup-label">🕐 Next Arrivals:</span>
+                    <span class="popup-label">🕐 Next Arrivals (Real-time):</span>
                     ${sortedArrivals.map(rt => {
                         const time = new Date(rt.timestamp * 1000);
                         const now = new Date();
@@ -1805,6 +1880,36 @@ class TBMTransitMap {
                     }).join('')}
                 </div>
             `;
+        } else {
+            // Show scheduled arrivals info when no real-time data
+            const scheduledArrivals = this.getScheduledArrivals(stop.stop_id);
+            
+            if (scheduledArrivals.length > 0) {
+                arrivalsHTML = `
+                    <div class="popup-section">
+                        <span class="popup-label">📅 Scheduled Arrivals:</span>
+                        ${scheduledArrivals.map(arrival => `
+                            <div class="arrival-item">
+                                <div>
+                                    <span class="line-badge" style="background-color: #${arrival.lineColor}; display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
+                                        ${arrival.lineCode}
+                                    </span>
+                                    → ${arrival.destination}
+                                </div>
+                                <div class="arrival-time">${arrival.timeStr}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } else {
+                arrivalsHTML = `
+                    <div class="popup-section popup-info-message">
+                        <span class="popup-label">ℹ️ Info:</span>
+                        No real-time arrival data available for this stop.
+                        Schedule-based predictions coming soon.
+                    </div>
+                `;
+            }
         }
 
         this.closeCurrentPopup();
