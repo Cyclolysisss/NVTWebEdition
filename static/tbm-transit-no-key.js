@@ -333,10 +333,11 @@ class TBMTransitMap {
         const visited = new Set();
         visited.add(startStop.stop_id);
 
-        const maxIterations = 10000;
+        const maxIterations = 20000; // Increased from 10000
         let iterations = 0;
+        const searchRange = 25; // Increased from 15 for better coverage
 
-        while (queue.length > 0 && routes.length < 3 && iterations < maxIterations) {
+        while (queue.length > 0 && routes.length < 5 && iterations < maxIterations) {
             iterations++;
             const current = queue.shift();
 
@@ -358,7 +359,8 @@ class TBMTransitMap {
                 if (currentIndex === -1) continue;
 
                 const checkIndices = [];
-                for (let i = Math.max(0, currentIndex - 15); i < Math.min(lineStops.length, currentIndex + 15); i++) {
+                // Expanded search range for better route discovery
+                for (let i = Math.max(0, currentIndex - searchRange); i < Math.min(lineStops.length, currentIndex + searchRange); i++) {
                     if (i !== currentIndex) checkIndices.push(i);
                 }
 
@@ -440,9 +442,26 @@ class TBMTransitMap {
     }
 
     getStopsOnLine(lineRef) {
-        return this.networkData.stops.filter(stop =>
+        const stops = this.networkData.stops.filter(stop =>
             stop.lines && stop.lines.includes(lineRef)
-        ).sort((a, b) => a.stop_sequence - b.stop_sequence || 0);
+        );
+        
+        // If no stops found, return empty array
+        if (stops.length === 0) return [];
+        
+        // Try to sort by stop_sequence if available, otherwise maintain existing order
+        // Note: stop_sequence might not be available in all datasets
+        return stops.sort((a, b) => {
+            const seqA = a.stop_sequence || 0;
+            const seqB = b.stop_sequence || 0;
+            
+            // If both have no sequence, sort by stop_id to maintain consistent ordering
+            if (seqA === 0 && seqB === 0) {
+                return a.stop_id.localeCompare(b.stop_id);
+            }
+            
+            return seqA - seqB;
+        });
     }
 
     getStopsBetween(lineStops, fromIndex, toIndex) {

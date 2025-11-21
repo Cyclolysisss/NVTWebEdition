@@ -174,8 +174,13 @@
         .line-meta { display: flex; gap: 12px; font-size: 11px; color: var(--text-tertiary); flex-wrap: wrap; }
         .vehicle-count, .shape-count { display: flex; align-items: center; gap: 5px; background: var(--badge-bg); padding: 3px 8px; border-radius: 6px; }
 
-        .operator-badge { background: #007cbf; color: white; padding: 2px 8px; border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; box-shadow: 0 2px 6px rgba(0, 124, 191, 0.4); }
-        .operator-badge.transgironde { background: #ff6b35; box-shadow: 0 2px 6px rgba(255, 107, 53, 0.4); }
+        /* Badges - consolidated definitions */
+        .operator-badge, .network-badge { display: inline-block; color: white; border-radius: 6px; font-weight: 700; text-transform: uppercase; }
+        .operator-badge { background: #007cbf; padding: 2px 8px; font-size: 10px; box-shadow: 0 2px 6px rgba(0, 124, 191, 0.4); }
+        .operator-badge.transgironde, .network-badge.transgironde { background: #ff6b35; box-shadow: 0 2px 6px rgba(255, 107, 53, 0.4); }
+        .operator-badge.sncf, .network-badge.sncf { background: #82BE00; box-shadow: 0 2px 6px rgba(130, 190, 0, 0.4); }
+        .network-badge { padding: 4px 8px; font-size: 10px; margin-left: 8px; }
+        .network-badge.tbm { background: #007cbf; }
         .alert-badge { background: #dc3545; color: white; padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; box-shadow: 0 2px 6px rgba(220, 53, 69, 0.4); }
         
         .filter-group { margin-bottom: 16px; }
@@ -280,15 +285,6 @@
         .loading-content { background: var(--overlay-bg); padding: 30px; border-radius: 16px; text-align: center; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3); }
         .loading-content .spinner { margin-bottom: 16px; }
         .loading-content div:last-child { color: var(--text-primary); }
-
-        .network-badge { display: inline-block; padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: 700; margin-left: 8px; text-transform: uppercase; }
-        .network-badge.tbm { background: #007cbf; color: white; }
-        .network-badge.transgironde { background: #ff6b35; color: white; }
-        .network-badge.sncf { background: #82BE00; color: white; }
-        
-        .operator-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 700; margin-left: 6px; text-transform: uppercase; }
-        .operator-badge.transgironde { background: #ff6b35; color: white; }
-        .operator-badge.sncf { background: #82BE00; color: white; }
 
         .theme-toggle { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); background: var(--overlay-bg); border: 1.5px solid var(--overlay-border); border-radius: 30px; padding: 8px; display: flex; align-items: center; gap: 10px; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 12px var(--shadow-color); z-index: 999; }
         .theme-toggle:hover { transform: translateX(-50%) scale(1.05); }
