@@ -36,6 +36,8 @@ class TBMTransitMap {
         this.MAX_ROUTES_TO_FIND = 5;
 
         // Time calculation constants
+        // Note: Defined explicitly for clarity and to match backend constants
+        // rather than using built-in Date methods for consistency
         this.SECONDS_PER_HOUR = 3600;
         this.SECONDS_PER_MINUTE = 60;
 
@@ -644,7 +646,18 @@ class TBMTransitMap {
                     // Parse time and calculate minutes until arrival
                     const timeSeconds = this.parseGTFSTime(arrival.arrival_time);
                     const currentSeconds = this.getCurrentTimeInSeconds();
-                    const minutesUntil = Math.floor((timeSeconds - currentSeconds) / this.SECONDS_PER_MINUTE);
+                    
+                    let minutesUntil;
+                    if (timeSeconds >= 86400) {
+                        // Next-day service (e.g., 25:30:00 = 1:30 AM next day)
+                        // Calculate as (time - 24h) - current_time + remaining_today
+                        const nextDaySeconds = timeSeconds - 86400;
+                        const secondsUntilMidnight = 86400 - currentSeconds;
+                        minutesUntil = Math.floor((secondsUntilMidnight + nextDaySeconds) / this.SECONDS_PER_MINUTE);
+                    } else {
+                        // Same-day service
+                        minutesUntil = Math.floor((timeSeconds - currentSeconds) / this.SECONDS_PER_MINUTE);
+                    }
                     
                     let timeStr;
                     if (minutesUntil < 0) {

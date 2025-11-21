@@ -2079,9 +2079,14 @@ impl NVTModels {
     ) -> Vec<ScheduledArrival> {
         use chrono::{Local, Datelike, Timelike};
         
+        const SECONDS_PER_HOUR: u32 = 3600;
+        const SECONDS_PER_MINUTE: u32 = 60;
+        const SECONDS_IN_DAY: u32 = 86400;
+        const LATE_EVENING_THRESHOLD: u32 = 79200; // 22:00:00
+        
         let now = Local::now();
         let today_date = format!("{}{:02}{:02}", now.year(), now.month(), now.day());
-        let current_seconds = now.hour() * 3600 + now.minute() * 60 + now.second();
+        let current_seconds = now.hour() * SECONDS_PER_HOUR + now.minute() * SECONDS_PER_MINUTE + now.second();
         
         let weekday_num = now.weekday().num_days_from_monday(); // 0 = Monday, 6 = Sunday
         
@@ -2113,8 +2118,18 @@ impl NVTModels {
                         
                         // Parse arrival time
                         if let Some(arrival_seconds) = Self::parse_gtfs_time(&stop_time.arrival_time) {
-                            // Only include future arrivals (with 2 hour lookahead for next-day services)
-                            if arrival_seconds >= current_seconds || arrival_seconds >= 86400 {
+                            // Handle next-day services (times >= 24:00:00)
+                            // Only include future arrivals within the next 2 hours window
+                            let is_future = if arrival_seconds >= SECONDS_IN_DAY {
+                                // Next-day service (e.g., 25:30:00)
+                                // Only show if current time is late enough (e.g., after 22:00)
+                                current_seconds >= LATE_EVENING_THRESHOLD
+                            } else {
+                                // Same-day service
+                                arrival_seconds >= current_seconds
+                            };
+                            
+                            if is_future {
                                 // Get line info
                                 let line_color = gtfs_cache.routes.get(&trip.route_id)
                                     .cloned()
