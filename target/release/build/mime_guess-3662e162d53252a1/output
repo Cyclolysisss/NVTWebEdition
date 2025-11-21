@@ -1,1 +1,0 @@
-cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/home/runner/work/NVTWebEdition/NVTWebEdition/target/release/build/mime_guess-3662e162d53252a1/out/mime_types_generated.rs
