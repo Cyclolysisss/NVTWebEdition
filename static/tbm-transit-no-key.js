@@ -129,6 +129,78 @@ class TBMTransitMap {
         this.init();
     }
 
+    // Save user preferences to localStorage
+    savePreferences() {
+        const prefs = {
+            showShapes: document.getElementById('showShapes')?.checked ?? true,
+            showVehicles: document.getElementById('showVehicles')?.checked ?? true,
+            showStops: document.getElementById('showStops')?.checked ?? true,
+            showAlerts: document.getElementById('showAlerts')?.checked ?? true,
+            showHeatmap: document.getElementById('showHeatmap')?.checked ?? false,
+        };
+        
+        localStorage.setItem('nvt_preferences', JSON.stringify(prefs));
+        console.log('💾 Preferences saved');
+    }
+
+    // Load user preferences from localStorage
+    loadPreferences() {
+        try {
+            const saved = localStorage.getItem('nvt_preferences');
+            if (!saved) return;
+
+            const prefs = JSON.parse(saved);
+            
+            // Apply to desktop checkboxes
+            if (prefs.showShapes !== undefined) {
+                const el = document.getElementById('showShapes');
+                if (el) el.checked = prefs.showShapes;
+            }
+            if (prefs.showVehicles !== undefined) {
+                const el = document.getElementById('showVehicles');
+                if (el) el.checked = prefs.showVehicles;
+            }
+            if (prefs.showStops !== undefined) {
+                const el = document.getElementById('showStops');
+                if (el) el.checked = prefs.showStops;
+            }
+            if (prefs.showAlerts !== undefined) {
+                const el = document.getElementById('showAlerts');
+                if (el) el.checked = prefs.showAlerts;
+            }
+            if (prefs.showHeatmap !== undefined) {
+                const el = document.getElementById('showHeatmap');
+                if (el) el.checked = prefs.showHeatmap;
+            }
+
+            // Apply to mobile checkboxes
+            if (prefs.showShapes !== undefined) {
+                const el = document.getElementById('showShapesMobile');
+                if (el) el.checked = prefs.showShapes;
+            }
+            if (prefs.showVehicles !== undefined) {
+                const el = document.getElementById('showVehiclesMobile');
+                if (el) el.checked = prefs.showVehicles;
+            }
+            if (prefs.showStops !== undefined) {
+                const el = document.getElementById('showStopsMobile');
+                if (el) el.checked = prefs.showStops;
+            }
+            if (prefs.showAlerts !== undefined) {
+                const el = document.getElementById('showAlertsMobile');
+                if (el) el.checked = prefs.showAlerts;
+            }
+            if (prefs.showHeatmap !== undefined) {
+                const el = document.getElementById('showHeatmapMobile');
+                if (el) el.checked = prefs.showHeatmap;
+            }
+
+            console.log('✅ Preferences loaded');
+        } catch (e) {
+            console.warn('⚠️ Failed to load preferences:', e);
+        }
+    }
+
     init() {
         mapboxgl.accessToken = this.mapboxToken;
 
@@ -288,6 +360,12 @@ class TBMTransitMap {
     async calculateTransitRoute(startStopId, endStopId) {
         console.log(`🗺️  Calculating route: ${startStopId} → ${endStopId}`);
 
+        // Validate inputs
+        if (startStopId === endStopId) {
+            this.showNotification('⚠️ Start and destination are the same', 'error');
+            return null;
+        }
+
         this.showLoading(true);
 
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -302,12 +380,28 @@ class TBMTransitMap {
             return null;
         }
 
+        // Check if stops have any lines
+        if (!startStop.lines || startStop.lines.length === 0) {
+            this.showLoading(false);
+            this.showNotification('⚠️ Start stop has no transit lines', 'error');
+            return null;
+        }
+
+        if (!endStop.lines || endStop.lines.length === 0) {
+            this.showLoading(false);
+            this.showNotification('⚠️ Destination stop has no transit lines', 'error');
+            return null;
+        }
+
+        console.log(`🔍 Finding routes from "${startStop.stop_name}" to "${endStop.stop_name}"`);
+
         const routes = this.findTransitRoutes(startStop, endStop);
 
         this.showLoading(false);
 
         if (routes.length === 0) {
-            this.showNotification('⚠️ No transit route found', 'error');
+            console.log('❌ No direct or transfer routes found');
+            this.showNotification('⚠️ No transit route found between these stops. Try selecting stops on connected lines.', 'error');
             return null;
         }
 
@@ -317,7 +411,7 @@ class TBMTransitMap {
             return a.distance - b.distance;
         })[0];
 
-        console.log('✅ Best route found:', bestRoute);
+        console.log(`✅ Best route found with ${bestRoute.transfers} transfer(s) and ${routes.length} alternative(s)`);
         this.displayTransitRoute(bestRoute);
         return bestRoute;
     }
@@ -1988,6 +2082,9 @@ class TBMTransitMap {
     }
 
     setupEventListeners() {
+        // Load saved preferences first
+        this.loadPreferences();
+
         const desktopCheckboxes = ['showShapes', 'showVehicles', 'showStops', 'showAlerts', 'showHeatmap'];
         
         desktopCheckboxes.forEach(id => {
@@ -1998,12 +2095,14 @@ class TBMTransitMap {
                 checkbox.addEventListener('change', (e) => {
                     this.map.setLayoutProperty('line-shapes-layer', 'visibility',
                         e.target.checked ? 'visible' : 'none');
+                    this.savePreferences();
                 });
             } else if (id === 'showVehicles') {
                 checkbox.addEventListener('change', (e) => {
                     const visibility = e.target.checked ? 'visible' : 'none';
                     this.map.setLayoutProperty('vehicles-layer', 'visibility', visibility);
                     this.map.setLayoutProperty('vehicles-labels', 'visibility', visibility);
+                    this.savePreferences();
                 });
             } else if (id === 'showStops') {
                 checkbox.addEventListener('change', (e) => {
@@ -2012,6 +2111,7 @@ class TBMTransitMap {
                         this.map.setLayoutProperty('stops-layer', 'visibility', visibility);
                         this.map.setLayoutProperty('stops-labels', 'visibility', visibility);
                     }
+                    this.savePreferences();
                 });
             } else if (id === 'showAlerts') {
                 checkbox.addEventListener('change', (e) => {
@@ -2020,6 +2120,7 @@ class TBMTransitMap {
                     } else {
                         this.map.setFilter('stops-layer', ['==', ['get', 'alerts'], 0]);
                     }
+                    this.savePreferences();
                 });
             } else if (id === 'showHeatmap') {
                 checkbox.addEventListener('change', (e) => {
@@ -2029,6 +2130,7 @@ class TBMTransitMap {
                         e.target.checked ? 'none' : 'visible');
                     this.map.setLayoutProperty('vehicles-labels', 'visibility',
                         e.target.checked ? 'none' : 'visible');
+                    this.savePreferences();
                 });
             }
         });
