@@ -69,6 +69,6 @@ ARFLAGS_x86_64_unknown_linux_gnu = None
 cargo:rerun-if-env-changed=ARFLAGS_x86_64-unknown-linux-gnu
 ARFLAGS_x86_64-unknown-linux-gnu = None
 cargo:rustc-link-lib=static=bz2
-cargo:rustc-link-search=native=/home/ubuntu/NVTWebEdition/target/release/build/bzip2-sys-809d08c9a459e2bd/out/lib
-cargo:root=/home/ubuntu/NVTWebEdition/target/release/build/bzip2-sys-809d08c9a459e2bd/out
-cargo:include=/home/ubuntu/NVTWebEdition/target/release/build/bzip2-sys-809d08c9a459e2bd/out/include
+cargo:rustc-link-search=native=/home/runner/work/NVTWebEdition/NVTWebEdition/target/release/build/bzip2-sys-809d08c9a459e2bd/out/lib
+cargo:root=/home/runner/work/NVTWebEdition/NVTWebEdition/target/release/build/bzip2-sys-809d08c9a459e2bd/out
+cargo:include=/home/runner/work/NVTWebEdition/NVTWebEdition/target/release/build/bzip2-sys-809d08c9a459e2bd/out/include

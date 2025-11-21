@@ -1,9 +1,8 @@
 // Backend API server with embedded frontend
 // TBM + TransGironde Transit API Server with integrated web UI
 
-use actix_web::{web, App, HttpServer, HttpResponse, middleware, HttpRequest};
+use actix_web::{web, App, HttpServer, HttpResponse, middleware};
 use actix_cors::Cors;
-use actix_files as fs;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,7 +13,7 @@ use tbm_api_models::{NVTModels, CachedNetworkData};
 
 // Embed static files at compile time
 const INDEX_HTML: &str = include_str!("../static/nvtweb.html");
-const TRANSIT_JS: &str = include_str!("../static/tbm-transit.js");
+const TRANSIT_JS: &str = include_str!("../static/tbm-transit-no-key.js");
 
 #[derive(Clone)]
 struct AppState {
