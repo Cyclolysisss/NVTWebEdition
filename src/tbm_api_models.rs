@@ -116,6 +116,19 @@ pub struct CalendarDate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledArrival {
+    pub trip_id: String,
+    pub route_id: String,
+    pub line_code: String,
+    pub line_color: String,
+    pub arrival_time: String,
+    pub departure_time: String,
+    pub destination: Option<String>,
+    pub stop_headsign: Option<String>,
+    pub operator: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Line {
     pub line_ref: String,
     pub line_name: String,
@@ -2056,5 +2069,150 @@ impl NVTModels {
             dynamic_age,
             Self::format_timestamp_full(cache.last_dynamic_update as i64)
         )
+    }
+
+    /// Get scheduled arrivals for a stop based on GTFS data
+    pub fn get_scheduled_arrivals(
+        stop_id: &str,
+        cache: &CachedNetworkData,
+        max_results: usize,
+    ) -> Vec<ScheduledArrival> {
+        use chrono::{Local, Datelike, Timelike};
+        
+        let now = Local::now();
+        let today_date = format!("{}{:02}{:02}", now.year(), now.month(), now.day());
+        let current_seconds = now.hour() * 3600 + now.minute() * 60 + now.second();
+        
+        let weekday_num = now.weekday().num_days_from_monday(); // 0 = Monday, 6 = Sunday
+        
+        let mut scheduled_arrivals = Vec::new();
+        
+        // Check all three GTFS caches
+        let gtfs_caches = vec![
+            (&cache.tbm_gtfs_cache, "TBM"),
+            (&cache.transgironde_gtfs_cache, "TransGironde"),
+            (&cache.sncf_gtfs_cache, "SNCF"),
+        ];
+        
+        for (gtfs_cache, operator) in gtfs_caches {
+            // Get stop times for this stop
+            if let Some(stop_times) = gtfs_cache.stop_times.get(stop_id) {
+                for stop_time in stop_times {
+                    // Get trip info
+                    if let Some(trip) = gtfs_cache.trips.get(&stop_time.trip_id) {
+                        // Check if service is active today
+                        if !Self::is_service_active(
+                            &trip.service_id,
+                            &today_date,
+                            weekday_num,
+                            &gtfs_cache.calendar,
+                            &gtfs_cache.calendar_dates,
+                        ) {
+                            continue;
+                        }
+                        
+                        // Parse arrival time
+                        if let Some(arrival_seconds) = Self::parse_gtfs_time(&stop_time.arrival_time) {
+                            // Only include future arrivals (with 2 hour lookahead for next-day services)
+                            if arrival_seconds >= current_seconds || arrival_seconds >= 86400 {
+                                // Get line info
+                                let line_color = gtfs_cache.routes.get(&trip.route_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| "808080".to_string());
+                                
+                                // Extract line code from route_id
+                                let line_code = Self::extract_line_code_from_route(&trip.route_id, operator);
+                                
+                                scheduled_arrivals.push(ScheduledArrival {
+                                    trip_id: stop_time.trip_id.clone(),
+                                    route_id: trip.route_id.clone(),
+                                    line_code,
+                                    line_color,
+                                    arrival_time: stop_time.arrival_time.clone(),
+                                    departure_time: stop_time.departure_time.clone(),
+                                    destination: trip.trip_headsign.clone(),
+                                    stop_headsign: stop_time.stop_headsign.clone(),
+                                    operator: operator.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Sort by arrival time and take top results
+        scheduled_arrivals.sort_by(|a, b| a.arrival_time.cmp(&b.arrival_time));
+        scheduled_arrivals.truncate(max_results);
+        scheduled_arrivals
+    }
+    
+    /// Check if a service is active on a given date
+    fn is_service_active(
+        service_id: &str,
+        date: &str,
+        weekday: u32,
+        calendar: &HashMap<String, ServiceCalendar>,
+        calendar_dates: &HashMap<String, Vec<CalendarDate>>,
+    ) -> bool {
+        // First check calendar_dates for exceptions
+        if let Some(exceptions) = calendar_dates.get(service_id) {
+            for exception in exceptions {
+                if exception.date == date {
+                    // exception_type: 1 = service added, 2 = service removed
+                    return exception.exception_type == 1;
+                }
+            }
+        }
+        
+        // Check regular calendar
+        if let Some(cal) = calendar.get(service_id) {
+            // Check if date is within service period
+            if date < cal.start_date.as_str() || date > cal.end_date.as_str() {
+                return false;
+            }
+            
+            // Check day of week
+            return match weekday {
+                0 => cal.monday,
+                1 => cal.tuesday,
+                2 => cal.wednesday,
+                3 => cal.thursday,
+                4 => cal.friday,
+                5 => cal.saturday,
+                6 => cal.sunday,
+                _ => false,
+            };
+        }
+        
+        false
+    }
+    
+    /// Parse GTFS time format (HH:MM:SS) to seconds since midnight
+    fn parse_gtfs_time(time_str: &str) -> Option<u32> {
+        let parts: Vec<&str> = time_str.split(':').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        
+        let hours: u32 = parts[0].parse().ok()?;
+        let minutes: u32 = parts[1].parse().ok()?;
+        let seconds: u32 = parts[2].parse().ok()?;
+        
+        Some(hours * 3600 + minutes * 60 + seconds)
+    }
+    
+    /// Extract line code from route ID for display
+    fn extract_line_code_from_route(route_id: &str, operator: &str) -> String {
+        if operator == "TBM" {
+            // TBM format: extract last part
+            route_id.split(':').last().unwrap_or(route_id).to_string()
+        } else if operator == "TransGironde" {
+            // TransGironde format: GIRONDE:Line:XXXX -> XXXX
+            route_id.split(':').last().unwrap_or(route_id).to_string()
+        } else {
+            // SNCF and others: use as is
+                        route_id.to_string()
+        }
     }
 }

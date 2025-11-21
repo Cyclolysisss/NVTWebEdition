@@ -619,22 +619,61 @@ class TBMTransitMap {
     /**
      * Get scheduled arrivals for a stop from GTFS data
      * 
-     * @todo This function is not yet fully implemented - requires backend integration
      * @param {string} stopId - The stop ID to get arrivals for
      * @param {number} maxResults - Maximum number of results to return
-     * @returns {Array} Array of scheduled arrival objects (empty until backend is integrated)
-     * 
-     * To complete implementation:
-     * 1. Add backend API endpoint to serve schedule data
-     * 2. Implement service calendar checking (which services run today)
-     * 3. Apply calendar_dates exceptions
-     * 4. Filter stop_times for active services
-     * 5. Return sorted upcoming arrivals
+     * @returns {Promise<Array>} Array of scheduled arrival objects
      */
-    getScheduledArrivals(stopId, maxResults = 5) {
-        // Placeholder - backend integration needed
-        console.log('📅 Schedule prediction placeholder - backend integration needed for stop:', stopId);
-        return [];
+    async getScheduledArrivals(stopId, maxResults = 5) {
+        try {
+            const response = await fetch(`${this.apiEndpoint}/stop/${stopId}/schedule`);
+            
+            if (!response.ok) {
+                console.warn(`⚠️ Failed to fetch schedule for stop ${stopId}: ${response.status}`);
+                return [];
+            }
+            
+            const json = await response.json();
+            
+            if (json.success && json.data) {
+                const arrivals = json.data;
+                
+                // Format arrivals for display
+                return arrivals.map(arrival => {
+                    const line = this.networkData.lines.find(l => l.route_id === arrival.route_id);
+                    
+                    // Parse time and calculate minutes until arrival
+                    const timeSeconds = this.parseGTFSTime(arrival.arrival_time);
+                    const currentSeconds = this.getCurrentTimeInSeconds();
+                    const minutesUntil = Math.floor((timeSeconds - currentSeconds) / this.SECONDS_PER_MINUTE);
+                    
+                    let timeStr;
+                    if (minutesUntil < 0) {
+                        timeStr = 'Passed';
+                    } else if (minutesUntil === 0) {
+                        timeStr = 'Now';
+                    } else if (minutesUntil < 60) {
+                        timeStr = `${minutesUntil} min`;
+                    } else {
+                        // Show actual time for farther arrivals
+                        timeStr = this.formatGTFSTime(timeSeconds);
+                    }
+                    
+                    return {
+                        lineCode: arrival.line_code,
+                        lineColor: arrival.line_color,
+                        destination: arrival.destination || arrival.stop_headsign || 'Unknown',
+                        timeStr: timeStr,
+                        operator: arrival.operator,
+                        minutes: minutesUntil
+                    };
+                }).filter(a => a.minutes >= 0); // Only show future arrivals
+            }
+            
+            return [];
+        } catch (error) {
+            console.error('❌ Error fetching schedule:', error);
+            return [];
+        }
     }
 
     estimateDuration(segment, line) {
@@ -1960,38 +1999,66 @@ class TBMTransitMap {
                 </div>
             `;
         } else {
-            // Only attempt scheduled arrivals if backend is ready
-            // For now, show informative message since getScheduledArrivals returns empty array
+            // Fetch scheduled arrivals when no real-time data
             arrivalsHTML = `
                 <div class="popup-section popup-info-message">
-                    <span class="popup-label">ℹ️ Info:</span>
-                    No real-time arrival data available for this stop.
-                    Schedule-based predictions coming soon.
+                    <span class="popup-label">⏳ Loading schedule...</span>
                 </div>
             `;
             
-            /* Future implementation when backend is ready:
-            const scheduledArrivals = this.getScheduledArrivals(stop.stop_id);
-            
-            if (scheduledArrivals.length > 0) {
-                arrivalsHTML = `
-                    <div class="popup-section">
-                        <span class="popup-label">📅 Scheduled Arrivals:</span>
-                        ${scheduledArrivals.map(arrival => `
-                            <div class="arrival-item">
-                                <div>
-                                    <span class="line-badge" style="background-color: #${arrival.lineColor}; display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
-                                        ${arrival.lineCode}
-                                    </span>
-                                    → ${arrival.destination}
-                                </div>
-                                <div class="arrival-time">${arrival.timeStr}</div>
-                            </div>
-                        `).join('')}
-                    </div>
-                `;
-            }
-            */
+            // Fetch and update asynchronously
+            this.getScheduledArrivals(stop.stop_id).then(scheduledArrivals => {
+                if (scheduledArrivals.length > 0) {
+                    const scheduleHTML = `
+                        <div class="popup-section">
+                            <span class="popup-label">📅 Scheduled Arrivals:</span>
+                            ${scheduledArrivals.map(arrival => {
+                                const operatorBadge = this.getOperatorBadge(arrival.operator, true).replace('operator-badge', 'operator-badge" style="margin-left: 8px;');
+                                
+                                return `
+                                    <div class="arrival-item">
+                                        <div>
+                                            <span class="line-badge" style="background-color: #${arrival.lineColor}; display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
+                                                ${arrival.lineCode}
+                                            </span>
+                                            ${operatorBadge}
+                                            → ${arrival.destination}
+                                        </div>
+                                        <div class="arrival-time">${arrival.timeStr}</div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    `;
+                    
+                    // Update popup if it's still open for this stop
+                    if (this.currentPopup) {
+                        const popupElement = this.currentPopup.getElement();
+                        if (popupElement) {
+                            const infoSection = popupElement.querySelector('.popup-info-message');
+                            if (infoSection) {
+                                infoSection.outerHTML = scheduleHTML;
+                            }
+                        }
+                    }
+                } else {
+                    // No schedule data available
+                    if (this.currentPopup) {
+                        const popupElement = this.currentPopup.getElement();
+                        if (popupElement) {
+                            const infoSection = popupElement.querySelector('.popup-info-message');
+                            if (infoSection) {
+                                infoSection.innerHTML = `
+                                    <span class="popup-label">ℹ️ Info:</span>
+                                    No scheduled arrivals available for this stop.
+                                `;
+                            }
+                        }
+                    }
+                }
+            }).catch(error => {
+                console.error('Error loading schedule:', error);
+            });
         }
 
         this.closeCurrentPopup();

@@ -310,6 +310,35 @@ async fn get_operators(state: web::Data<AppState>) -> HttpResponse {
     }
 }
 
+async fn get_stop_schedule(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let stop_id = path.into_inner();
+
+    match state.cache.lock() {
+        Ok(cache) => {
+            let scheduled_arrivals = NVTModels::get_scheduled_arrivals(&stop_id, &cache, 10);
+            
+            if scheduled_arrivals.is_empty() {
+                println!("📅 No scheduled arrivals found for stop: {}", stop_id);
+                HttpResponse::Ok().json(ApiResponse::success(scheduled_arrivals))
+            } else {
+                println!("📅 Scheduled arrivals retrieved for stop {}: {} arrivals", 
+                         stop_id, scheduled_arrivals.len());
+                HttpResponse::Ok().json(ApiResponse::success(scheduled_arrivals))
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to lock cache: {}", e);
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<Vec<tbm_api_models::ScheduledArrival>>::error(
+                    "Failed to retrieve schedule".to_string()
+                ))
+        }
+    }
+}
+
 async fn health_check() -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "healthy",
@@ -464,6 +493,7 @@ async fn run_server(cache: CachedNetworkData) -> std::io::Result<()> {
                     .route("/vehicles", web::get().to(get_vehicles))
                     .route("/alerts", web::get().to(get_alerts))
                     .route("/stop/{id}", web::get().to(get_stop_by_id))
+                    .route("/stop/{id}/schedule", web::get().to(get_stop_schedule))
                     .route("/line/{code}", web::get().to(get_line_by_code))
                     .route("/operator/{name}", web::get().to(get_lines_by_operator))
                     .route("/operators", web::get().to(get_operators))
