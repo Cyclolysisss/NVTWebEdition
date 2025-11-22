@@ -802,6 +802,15 @@ impl NVTModels {
     }
 
     fn parse_transgironde_stops(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<Vec<(String, String, f64, f64)>> {
+        // GTFS stops.txt field indices
+        const STOP_ID_INDEX: usize = 0;
+        const STOP_NAME_INDEX: usize = 1;
+        const STOP_LAT_INDEX: usize = 2;
+        const STOP_LON_INDEX: usize = 3;
+        // const STOP_CODE_INDEX: usize = 4;
+        // const STOP_DESC_INDEX: usize = 5;
+        // const LOCATION_TYPE_INDEX: usize = 6;
+        
         let mut stops_file = archive.by_name("stops.txt")
             .map_err(|e| NVTError::FileError(format!("stops.txt not found: {}", e)))?;
 
@@ -816,15 +825,14 @@ impl NVTModels {
 
         for result in rdr.records() {
             if let Ok(record) = result {
-                // Only process stops (location_type = 1 means station, we want individual stops)
-                if let (Some(stop_id), Some(stop_name), Some(lat_str), Some(lon_str), Some(location_type)) =
-                    (record.get(0), record.get(2), record.get(5), record.get(6), record.get(9)) {
+                // GTFS stops.txt format: stop_id, stop_name, stop_lat, stop_lon, stop_code, stop_desc, location_type, ...
+                if let (Some(stop_id), Some(stop_name), Some(lat_str), Some(lon_str)) =
+                    (record.get(STOP_ID_INDEX), record.get(STOP_NAME_INDEX), 
+                     record.get(STOP_LAT_INDEX), record.get(STOP_LON_INDEX)) {
 
-                    // Skip parent stations (location_type = 1)
-                    if location_type == "1" {
-                        continue;
-                    }
-
+                    // Note: In the New-Aquitaine GTFS feed, location_type=1 (stations) are the primary stops
+                    // used for routing, not just parent groupings. We include all stops with valid coordinates.
+                    
                     if let (Ok(lat), Ok(lon)) = (lat_str.parse::<f64>(), lon_str.parse::<f64>()) {
                         if lat != 0.0 && lon != 0.0 {
                             stops_data.push((
@@ -1107,13 +1115,39 @@ impl NVTModels {
             }
         }
         
+        // Identify TBM routes by checking agency IDs
+        // TBM agency in the aggregated feed: BORDEAUX_METROPOLE:Operator:TBM with name "TBM (Bordeaux Métropole)"
+        let mut tbm_route_ids = HashSet::new();
+        for (route_id, agency_id) in &cache.route_agencies {
+            // Match by agency_id (most precise) or agency_name (fallback)
+            let is_tbm = agency_id == "BORDEAUX_METROPOLE:Operator:TBM" || 
+                         agency_id.contains(":Operator:TBM") ||
+                         cache.agencies.get(agency_id)
+                             .map(|a| a.agency_name == "TBM" || a.agency_name.starts_with("TBM ("))
+                             .unwrap_or(false);
+            
+            if is_tbm {
+                tbm_route_ids.insert(route_id.clone());
+            }
+        }
+        
         let mut stops = Vec::new();
 
         // Create stops with properly populated lines arrays
         for (stop_id, stop_name, lat, lon) in &cache.stops {
-            let lines: Vec<String> = stop_to_routes.get(stop_id)
+            let routes: Vec<String> = stop_to_routes.get(stop_id)
                 .map(|set| set.iter().cloned().collect())
                 .unwrap_or_default();
+            
+            // Skip stops that are only served by TBM routes (already loaded from SIRI-Lite API)
+            if !routes.is_empty() && routes.iter().all(|r| tbm_route_ids.contains(r)) {
+                continue;
+            }
+            
+            // Filter out TBM routes from the lines array for stops served by multiple operators
+            let lines: Vec<String> = routes.into_iter()
+                .filter(|r| !tbm_route_ids.contains(r))
+                .collect();
             
             stops.push(Stop {
                 stop_id: stop_id.clone(),
@@ -1144,6 +1178,18 @@ impl NVTModels {
             } else {
                 "New-Aquitaine".to_string()
             };
+            
+            // Skip TBM lines as they are already loaded from the SIRI-Lite API with real-time data
+            // TBM is included in the New-Aquitaine aggregated GTFS feed (agency_id: BORDEAUX_METROPOLE:Operator:TBM)
+            // which would cause duplicates
+            let is_tbm = operator == "TBM" || 
+                         operator.starts_with("TBM (") ||
+                         agency_id.map(|id| id == "BORDEAUX_METROPOLE:Operator:TBM" || id.contains(":Operator:TBM"))
+                             .unwrap_or(false);
+            
+            if is_tbm {
+                continue;
+            }
             
             // Extract route short name from route_id
             // Format: "CA_DU_LIBOURNAIS:Line:XXX" -> "XXX"
