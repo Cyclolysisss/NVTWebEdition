@@ -1092,8 +1092,8 @@ class TBMTransitMap {
         
         // If short form requested, try to extract acronym or first word
         if (useShort) {
-            // Check for pattern like "YELO", "Calibus (Libourne)" -> "Calibus"
-            const match = operator.match(/^([A-Za-z]+)(?:\s+\(|$)/);
+            // Check for pattern like "YELO", "Calibus (Libourne)" or "Calibus(Libourne)" -> "Calibus"
+            const match = operator.match(/^([A-Za-z]+)(?:\s*\(|$)/);
             if (match) {
                 return match[1];
             }
