@@ -129,6 +129,25 @@ pub struct ScheduledArrival {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VehicleDetails {
+    pub vehicle_id: String,
+    pub trip_id: String,
+    pub route_id: Option<String>,
+    pub line_code: String,
+    pub line_name: String,
+    pub line_color: String,
+    pub operator: String,
+    pub destination: Option<String>,
+    pub current_stop: Option<Stop>,
+    pub next_stop: Option<Stop>,
+    pub previous_stop: Option<Stop>,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub timestamp: Option<i64>,
+    pub delay: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Line {
     pub line_ref: String,
     pub line_name: String,
@@ -496,20 +515,36 @@ impl NVTModels {
     }
 
     pub fn refresh_dynamic_data(cache: &mut CachedNetworkData) -> Result<()> {
+        // Fetch TBM data
         cache.alerts = Self::fetch_alerts().unwrap_or_else(|e| {
-            eprintln!("⚠️  Warning: Could not fetch alerts ({})", e);
+            eprintln!("⚠️  Warning: Could not fetch TBM alerts ({})", e);
             cache.alerts.clone()
         });
 
         cache.real_time = Self::fetch_vehicle_positions().unwrap_or_else(|e| {
-            eprintln!("⚠️  Warning: Could not fetch vehicle positions ({})", e);
+            eprintln!("⚠️  Warning: Could not fetch TBM vehicle positions ({})", e);
             cache.real_time.clone()
         });
 
         cache.trip_updates = Self::fetch_trip_updates().unwrap_or_else(|e| {
-            eprintln!("⚠️  Warning: Could not fetch trip updates ({})", e);
+            eprintln!("⚠️  Warning: Could not fetch TBM trip updates ({})", e);
             cache.trip_updates.clone()
         });
+
+        // Fetch SNCF real-time data
+        let sncf_alerts = Self::fetch_sncf_alerts().unwrap_or_else(|e| {
+            eprintln!("⚠️  Warning: Could not fetch SNCF alerts ({})", e);
+            Vec::new()
+        });
+
+        let sncf_trip_updates = Self::fetch_sncf_trip_updates().unwrap_or_else(|e| {
+            eprintln!("⚠️  Warning: Could not fetch SNCF trip updates ({})", e);
+            Vec::new()
+        });
+
+        // Merge SNCF data with TBM data
+        cache.alerts.extend(sncf_alerts);
+        cache.trip_updates.extend(sncf_trip_updates);
 
         cache.last_dynamic_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1389,6 +1424,13 @@ impl NVTModels {
         Ok(lines)
     }
 
+    fn create_http_client() -> Result<blocking::Client> {
+        blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))
+    }
+
     fn fetch_alerts() -> Result<Vec<AlertInfo>> {
         let url = format!(
             "{}/gtfsfeed/alerts/bordeaux?apiKey={}",
@@ -1396,10 +1438,7 @@ impl NVTModels {
             Self::API_KEY
         );
 
-        let client = blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+        let client = Self::create_http_client()?;
 
         let response = client.get(&url)
             .send()
@@ -1479,10 +1518,7 @@ impl NVTModels {
             Self::API_KEY
         );
 
-        let client = blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+        let client = Self::create_http_client()?;
 
         let response = client.get(&url)
             .send()
@@ -1561,10 +1597,7 @@ impl NVTModels {
             Self::API_KEY
         );
 
-        let client = blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+        let client = Self::create_http_client()?;
 
         let response = client.get(&url)
             .send()
@@ -1583,6 +1616,110 @@ impl NVTModels {
             .collect();
 
         Ok(updates)
+    }
+
+    fn fetch_sncf_trip_updates() -> Result<Vec<gtfs_rt::TripUpdate>> {
+        let client = Self::create_http_client()?;
+
+        let response = client.get(Self::SNCF_GTFS_RT_TRIP_UPDATES_URL)
+            .send()
+            .map_err(|e| NVTError::NetworkError(format!("Failed to fetch SNCF trip updates: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(NVTError::NetworkError(format!("SNCF trip updates request failed with status: {}", response.status())));
+        }
+
+        let body = response.bytes()
+            .map_err(|e| NVTError::NetworkError(format!("Failed to read SNCF trip updates response: {}", e)))?;
+
+        let feed = FeedMessage::decode(&*body)
+            .map_err(|e| NVTError::ParseError(format!("Failed to decode SNCF trip updates feed: {}", e)))?;
+
+        let updates = feed
+            .entity
+            .into_iter()
+            .filter_map(|entity| entity.trip_update)
+            .collect();
+
+        Ok(updates)
+    }
+
+    fn fetch_sncf_alerts() -> Result<Vec<AlertInfo>> {
+        let client = Self::create_http_client()?;
+
+        let response = client.get(Self::SNCF_GTFS_RT_SERVICE_ALERTS_URL)
+            .send()
+            .map_err(|e| NVTError::NetworkError(format!("Failed to fetch SNCF alerts: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(NVTError::NetworkError(format!("SNCF alerts request failed with status: {}", response.status())));
+        }
+
+        let body = response.bytes()
+            .map_err(|e| NVTError::NetworkError(format!("Failed to read SNCF alerts response: {}", e)))?;
+
+        let feed = FeedMessage::decode(&*body)
+            .map_err(|e| NVTError::ParseError(format!("Failed to decode SNCF alerts feed: {}", e)))?;
+
+        let alerts = feed
+            .entity
+            .into_iter()
+            .filter_map(|entity| {
+                entity.alert.map(|alert| {
+                    let header_text = alert
+                        .header_text
+                        .and_then(|h| h.translation.first().map(|t| t.text.clone()))
+                        .unwrap_or_else(|| "No title".to_string());
+
+                    let description_text = alert
+                        .description_text
+                        .and_then(|d| d.translation.first().map(|t| t.text.clone()))
+                        .unwrap_or_else(|| "No description available".to_string());
+
+                    let url = alert
+                        .url
+                        .and_then(|u| u.translation.first().map(|t| t.text.clone()));
+
+                    let mut route_ids = Vec::new();
+                    let mut stop_ids = Vec::new();
+
+                    for informed_entity in alert.informed_entity {
+                        if let Some(route_id) = informed_entity.route_id {
+                            route_ids.push(route_id);
+                        }
+                        if let Some(stop_id) = informed_entity.stop_id {
+                            stop_ids.push(stop_id);
+                        }
+                    }
+
+                    let (start, end) = alert.active_period
+                        .first()
+                        .map(|period| {
+                            (
+                                period.start.map(|s| s as i64),
+                                period.end.map(|e| e as i64)
+                            )
+                        })
+                        .unwrap_or((None, None));
+
+                    let severity = alert.severity_level.unwrap_or(0) as u32;
+
+                    AlertInfo {
+                        id: entity.id,
+                        text: header_text,
+                        description: description_text,
+                        url,
+                        route_ids,
+                        stop_ids,
+                        active_period_start: start,
+                        active_period_end: end,
+                        severity,
+                    }
+                })
+            })
+            .collect();
+
+        Ok(alerts)
     }
 
     fn download_and_read_gtfs() -> Result<GTFSCache> {
@@ -2156,8 +2293,22 @@ impl NVTModels {
             }
         }
         
-        // Sort by arrival time and take top results
+        // Sort by arrival time
         scheduled_arrivals.sort_by(|a, b| a.arrival_time.cmp(&b.arrival_time));
+        
+        // Deduplicate based on line_code, arrival_time, and destination
+        // Keep only the first occurrence of each unique combination
+        let mut seen = std::collections::HashSet::new();
+        scheduled_arrivals.retain(|arrival| {
+            let key = (
+                arrival.line_code.clone(),
+                arrival.arrival_time.clone(),
+                arrival.destination.clone().unwrap_or_default()
+            );
+            seen.insert(key)
+        });
+        
+        // Take top results after deduplication
         scheduled_arrivals.truncate(max_results);
         scheduled_arrivals
     }
@@ -2229,5 +2380,86 @@ impl NVTModels {
             // SNCF and others: use as is
             route_id.to_string()
         }
+    }
+
+    /// Get detailed information about a specific vehicle including stop sequence
+    pub fn get_vehicle_details(vehicle_id: &str, cache: &CachedNetworkData) -> Option<VehicleDetails> {
+        // Find the vehicle in real-time data
+        let vehicle = cache.real_time.iter().find(|v| v.vehicle_id == vehicle_id)?;
+
+        // Find the line this vehicle belongs to
+        let network_data = cache.to_network_data();
+        let line = network_data.lines.iter().find(|l| {
+            l.real_time.iter().any(|rt| rt.vehicle_id == vehicle_id)
+        })?;
+
+        // Get the trip information to find stop sequence
+        let gtfs_caches = vec![
+            (&cache.tbm_gtfs_cache, "TBM"),
+            (&cache.transgironde_gtfs_cache, "TransGironde"),
+            (&cache.sncf_gtfs_cache, "SNCF"),
+        ];
+
+        let mut current_stop = None;
+        let mut next_stop = None;
+        let mut previous_stop = None;
+
+        // Find stop sequence from trip information
+        for (gtfs_cache, _operator) in gtfs_caches {
+            if let Some(trip) = gtfs_cache.trips.get(&vehicle.trip_id) {
+                // Get all stops for this trip in sequence
+                let mut trip_stops: Vec<_> = gtfs_cache.stop_times.values()
+                    .flatten()
+                    .filter(|st| st.trip_id == vehicle.trip_id)
+                    .collect();
+                
+                trip_stops.sort_by_key(|st| st.stop_sequence);
+
+                // Find current stop position based on vehicle's current stop_id
+                if let Some(current_stop_id) = &vehicle.stop_id {
+                    if let Some(current_idx) = trip_stops.iter().position(|st| &st.stop_id == current_stop_id) {
+                        // Get current stop
+                        current_stop = network_data.stops.iter()
+                            .find(|s| &s.stop_id == current_stop_id)
+                            .cloned();
+
+                        // Get next stop
+                        if current_idx + 1 < trip_stops.len() {
+                            let next_stop_id = &trip_stops[current_idx + 1].stop_id;
+                            next_stop = network_data.stops.iter()
+                                .find(|s| &s.stop_id == next_stop_id)
+                                .cloned();
+                        }
+
+                        // Get previous stop
+                        if current_idx > 0 {
+                            let prev_stop_id = &trip_stops[current_idx - 1].stop_id;
+                            previous_stop = network_data.stops.iter()
+                                .find(|s| &s.stop_id == prev_stop_id)
+                                .cloned();
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
+        Some(VehicleDetails {
+            vehicle_id: vehicle.vehicle_id.clone(),
+            trip_id: vehicle.trip_id.clone(),
+            route_id: vehicle.route_id.clone(),
+            line_code: line.line_code.clone(),
+            line_name: line.line_name.clone(),
+            line_color: line.color.clone(),
+            operator: line.operator.clone(),
+            destination: vehicle.destination.clone(),
+            current_stop,
+            next_stop,
+            previous_stop,
+            latitude: vehicle.latitude,
+            longitude: vehicle.longitude,
+            timestamp: vehicle.timestamp,
+            delay: vehicle.delay,
+        })
     }
 }

@@ -17,6 +17,11 @@ class TBMTransitMap {
         this.routeEnd = null;
         this.transitRoutes = [];
 
+        // Vehicle tracking
+        this.trackedVehicle = null;
+        this.vehicleTrackingInterval = null;
+        this.VEHICLE_TRACKING_INTERVAL_MS = 10000; // 10 seconds
+
         // Performance optimizations
         this.searchDebounceTimer = null;
         this.renderDebounceTimer = null;
@@ -2135,6 +2140,11 @@ class TBMTransitMap {
                     <span class="popup-label">Last Update:</span> ${timestamp}
                     ${delayText}
                 </div>
+                <div class="popup-actions">
+                    <button class="popup-btn popup-btn-primary" onclick="tbmMap.trackVehicle('${props.vehicle_id}')">
+                        📍 Track Vehicle
+                    </button>
+                </div>
             `)
             .addTo(this.map);
     }
@@ -2305,6 +2315,177 @@ class TBMTransitMap {
     getContrastColor(rgb) {
         const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
         return luminance > 0.5 ? '#000000' : '#ffffff';
+    }
+
+    async trackVehicle(vehicleId) {
+        console.log(`🎯 Tracking vehicle: ${vehicleId}`);
+        
+        this.closeCurrentPopup();
+        
+        try {
+            const response = await fetch(`${this.apiEndpoint}/vehicle/${vehicleId}`);
+            const result = await response.json();
+            
+            if (!result.success || !result.data) {
+                this.showNotification('❌ Vehicle not found', 'error');
+                return;
+            }
+            
+            this.trackedVehicle = result.data;
+            this.showVehicleTracking(result.data);
+            this.highlightTrackedVehicle(vehicleId);
+            
+            // Start auto-update for tracked vehicle
+            if (this.vehicleTrackingInterval) {
+                clearInterval(this.vehicleTrackingInterval);
+            }
+            
+            this.vehicleTrackingInterval = setInterval(() => {
+                this.updateTrackedVehicle(vehicleId);
+            }, this.VEHICLE_TRACKING_INTERVAL_MS);
+            
+        } catch (error) {
+            console.error('Failed to track vehicle:', error);
+            this.showNotification('❌ Failed to track vehicle', 'error');
+        }
+    }
+
+    async updateTrackedVehicle(vehicleId) {
+        try {
+            const response = await fetch(`${this.apiEndpoint}/vehicle/${vehicleId}`);
+            const result = await response.json();
+            
+            if (result.success && result.data) {
+                this.trackedVehicle = result.data;
+                this.showVehicleTracking(result.data);
+                this.highlightTrackedVehicle(vehicleId);
+            } else {
+                // Vehicle no longer available
+                this.stopTrackingVehicle();
+                this.showNotification('⚠️ Vehicle tracking lost', 'error');
+            }
+        } catch (error) {
+            console.error('Failed to update tracked vehicle:', error);
+            this.showNotification('⚠️ Failed to update vehicle', 'error');
+        }
+    }
+
+    showVehicleTracking(vehicleData) {
+        const panel = document.getElementById('infoPanel');
+        const title = document.getElementById('infoPanelTitle');
+        const content = document.getElementById('infoPanelContent');
+        
+        title.textContent = `🚌 Tracking Vehicle ${vehicleData.vehicle_id}`;
+        
+        const operatorBadge = this.getOperatorBadge(vehicleData.operator);
+        
+        let stopsHTML = '';
+        
+        if (vehicleData.previous_stop) {
+            stopsHTML += `
+                <div class="route-step-stop">
+                    <span class="route-step-bullet" style="color: #6c757d;">●</span>
+                    <span style="color: var(--text-secondary);">${vehicleData.previous_stop.stop_name}</span>
+                    <span style="color: var(--text-tertiary); font-size: 12px; margin-left: 8px;">Previous</span>
+                </div>
+            `;
+        }
+        
+        if (vehicleData.current_stop) {
+            stopsHTML += `
+                <div class="route-step-stop">
+                    <span class="route-step-bullet" style="color: #007cbf;">●</span>
+                    <strong>${vehicleData.current_stop.stop_name}</strong>
+                    <span style="color: #007cbf; font-size: 12px; margin-left: 8px; font-weight: 600;">Current</span>
+                </div>
+            `;
+        }
+        
+        if (vehicleData.next_stop) {
+            stopsHTML += `
+                <div class="route-step-stop">
+                    <span class="route-step-bullet start">●</span>
+                    <strong>${vehicleData.next_stop.stop_name}</strong>
+                    <span style="color: #28a745; font-size: 12px; margin-left: 8px; font-weight: 600;">Next</span>
+                </div>
+            `;
+        }
+        
+        const timestamp = vehicleData.timestamp ? 
+            new Date(vehicleData.timestamp * 1000).toLocaleTimeString() : 'Unknown';
+        
+        const delayText = vehicleData.delay ? 
+            `<div class="arrival-delay ${vehicleData.delay > 0 ? 'late' : ''}">${vehicleData.delay > 0 ? '+' : ''}${vehicleData.delay}s</div>` : '';
+        
+        content.innerHTML = `
+            <div style="margin-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                    <span class="line-badge" style="background-color: #${vehicleData.line_color}; color: white; font-size: 16px; padding: 4px 12px;">
+                        ${vehicleData.line_code}
+                    </span>
+                    <span style="font-weight: 600; font-size: 15px;">${vehicleData.line_name}</span>
+                    ${operatorBadge}
+                </div>
+                
+                <div style="background: var(--badge-bg); padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+                    <div style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 4px;">TERMINUS</div>
+                    <div style="font-size: 16px; font-weight: 600; color: var(--text-primary);">
+                        ${vehicleData.destination || 'Unknown'}
+                    </div>
+                </div>
+                
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                    <strong>Trip ID:</strong> ${vehicleData.trip_id}
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                    <strong>Last Update:</strong> ${timestamp} ${delayText}
+                </div>
+            </div>
+            
+            <div style="background: var(--filter-bg); padding: 14px; border-radius: 10px; margin-bottom: 12px;">
+                <div style="font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 10px;">
+                    🚏 Stop Sequence
+                </div>
+                ${stopsHTML || '<div class="popup-info-message">No stop information available</div>'}
+            </div>
+            
+            <button onclick="tbmMap.stopTrackingVehicle()" class="clear-selection-btn icon-button" style="margin-top: 12px;">
+                ✕ Stop Tracking
+            </button>
+        `;
+        
+        panel.style.display = 'block';
+        
+        // Center map on vehicle
+        if (vehicleData.latitude && vehicleData.longitude) {
+            this.map.flyTo({
+                center: [vehicleData.longitude, vehicleData.latitude],
+                zoom: 14,
+                duration: 1000
+            });
+        }
+    }
+
+    highlightTrackedVehicle(vehicleId) {
+        // Add a pulsing effect or different style to the tracked vehicle
+        // This would require updating the map layer styling
+        console.log(`Highlighting vehicle: ${vehicleId}`);
+    }
+
+    stopTrackingVehicle() {
+        console.log('🛑 Stopping vehicle tracking');
+        
+        if (this.vehicleTrackingInterval) {
+            clearInterval(this.vehicleTrackingInterval);
+            this.vehicleTrackingInterval = null;
+        }
+        
+        this.trackedVehicle = null;
+        
+        const panel = document.getElementById('infoPanel');
+        panel.style.display = 'none';
+        
+        this.showNotification('✓ Vehicle tracking stopped');
     }
 }
 
