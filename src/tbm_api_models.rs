@@ -53,6 +53,7 @@ pub struct RealTimeInfo {
     pub latitude: f64,
     pub longitude: f64,
     pub stop_id: Option<String>,
+    pub current_stop_sequence: Option<u32>,
     pub timestamp: Option<i64>,
     pub delay: Option<i32>,
 }
@@ -1569,6 +1570,7 @@ impl NVTModels {
                         .unwrap_or((0.0, 0.0));
 
                     let stop_id = vehicle.stop_id.clone();
+                    let current_stop_sequence = vehicle.current_stop_sequence;
                     let timestamp = vehicle.timestamp.map(|ts| ts as i64);
 
                     RealTimeInfo {
@@ -1580,6 +1582,7 @@ impl NVTModels {
                         latitude,
                         longitude,
                         stop_id,
+                        current_stop_sequence,
                         timestamp,
                         delay: None,
                     }
@@ -2016,6 +2019,7 @@ impl NVTModels {
                             latitude: lat,
                             longitude: lon,
                             stop_id: Some(id.clone()),
+                            current_stop_sequence: None,
                             timestamp: *time,
                             delay: *delay,
                         });
@@ -2406,7 +2410,7 @@ impl NVTModels {
 
         // Find stop sequence from trip information
         for (gtfs_cache, _operator) in gtfs_caches {
-            if let Some(trip) = gtfs_cache.trips.get(&vehicle.trip_id) {
+            if let Some(_trip) = gtfs_cache.trips.get(&vehicle.trip_id) {
                 // Get all stops for this trip in sequence
                 let mut trip_stops: Vec<_> = gtfs_cache.stop_times.values()
                     .flatten()
@@ -2415,29 +2419,41 @@ impl NVTModels {
                 
                 trip_stops.sort_by_key(|st| st.stop_sequence);
 
-                // Find current stop position based on vehicle's current stop_id
-                if let Some(current_stop_id) = &vehicle.stop_id {
-                    if let Some(current_idx) = trip_stops.iter().position(|st| &st.stop_id == current_stop_id) {
-                        // Get current stop
+                // Try to find current stop position using current_stop_sequence first (most accurate)
+                let current_idx = if let Some(seq) = vehicle.current_stop_sequence {
+                    // Use the sequence number from GTFS-RT to find exact position
+                    trip_stops.iter().position(|st| st.stop_sequence == seq)
+                } else if let Some(current_stop_id) = &vehicle.stop_id {
+                    // Fallback: find by stop_id (may not work correctly for duplicate stops)
+                    trip_stops.iter().position(|st| &st.stop_id == current_stop_id)
+                } else {
+                    None
+                };
+
+                if let Some(idx) = current_idx {
+                    // Get current stop
+                    if let Some(current_stop_id) = vehicle.stop_id.as_ref().or_else(|| {
+                        trip_stops.get(idx).map(|st| &st.stop_id)
+                    }) {
                         current_stop = network_data.stops.iter()
                             .find(|s| &s.stop_id == current_stop_id)
                             .cloned();
+                    }
 
-                        // Get next stop
-                        if current_idx + 1 < trip_stops.len() {
-                            let next_stop_id = &trip_stops[current_idx + 1].stop_id;
-                            next_stop = network_data.stops.iter()
-                                .find(|s| &s.stop_id == next_stop_id)
-                                .cloned();
-                        }
+                    // Get next stop
+                    if idx + 1 < trip_stops.len() {
+                        let next_stop_id = &trip_stops[idx + 1].stop_id;
+                        next_stop = network_data.stops.iter()
+                            .find(|s| &s.stop_id == next_stop_id)
+                            .cloned();
+                    }
 
-                        // Get previous stop
-                        if current_idx > 0 {
-                            let prev_stop_id = &trip_stops[current_idx - 1].stop_id;
-                            previous_stop = network_data.stops.iter()
-                                .find(|s| &s.stop_id == prev_stop_id)
-                                .cloned();
-                        }
+                    // Get previous stop
+                    if idx > 0 {
+                        let prev_stop_id = &trip_stops[idx - 1].stop_id;
+                        previous_stop = network_data.stops.iter()
+                            .find(|s| &s.stop_id == prev_stop_id)
+                            .cloned();
                     }
                 }
                 break;
