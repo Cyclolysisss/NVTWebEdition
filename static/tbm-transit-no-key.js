@@ -1,7 +1,7 @@
-// TBM + TransGironde Transit Network Visualization - OPTIMIZED VERSION
-// Enhanced with dual-operator support and advanced routing
-// Version: 1.2.0
-// Last Updated: 2025-11-20 06:38:04 UTC
+// New-Aquitaine Transit Network Visualization - OPTIMIZED VERSION
+// Enhanced with multi-operator support (TBM + 50+ regional operators + SNCF) and advanced routing
+// Version: 1.4.0
+// Last Updated: 2025-11-22 11:41:00 UTC
 // User: Cyclolysisss
 
 class TBMTransitMap {
@@ -46,7 +46,7 @@ class TBMTransitMap {
         this.SECONDS_PER_HOUR = 3600;
         this.SECONDS_PER_MINUTE = 60;
 
-        // Enhanced line type classification with TransGironde and SNCF support
+        // Enhanced line type classification with regional operators and SNCF support
         this.lineTypes = {
             tram: {
                 icon: '🚊',
@@ -66,9 +66,9 @@ class TBMTransitMap {
                 patterns: [/^([1-9]|[1-9]\d)$/, /^([1-9]|[1-9]\d)\s+(Est|Ouest|Nord|Sud)$/i, /^([1-9]|[1-9]\d)[EeOoNnSs]$/],
                 order: 3
             },
-            transgironde: {
+            regional: {
                 icon: '🚐',
-                name: 'TransGironde Regional',
+                name: 'Regional Lines',
                 patterns: [/^\d{3,4}$/],
                 order: 4
             },
@@ -702,7 +702,7 @@ class TBMTransitMap {
             tram: 2.5,
             brt: 2,
             bus: 3,
-            transgironde: 4,
+            regional: 4,
             ferry: 5,
             school: 3,
             night: 3,
@@ -934,7 +934,7 @@ class TBMTransitMap {
         content.innerHTML = `
             <p style="font-size: 13px; color: var(--text-tertiary); margin-bottom: 12px; line-height: 1.6;">
                 Click on any two stops on the map to plan your transit route. 
-                The system will calculate the best route using TBM and TransGironde lines.
+                The system will calculate the best route using TBM, regional operators, and SNCF lines.
             </p>
         `;
 
@@ -1007,13 +1007,14 @@ class TBMTransitMap {
     }
 
     classifyLine(line) {
-        if (line.operator === "TransGironde") {
-            const code = line.line_code.trim();
-            if (/^\d{3,4}$/.test(code)) {
-                return 'transgironde';
-            }
-        }
-
+        // Check if this is a TBM line (includes routes from TBM in the New-Aquitaine feed)
+        const isTBM = line.operator && (
+            line.operator === "TBM" || 
+            line.operator.includes("TBM") ||
+            line.operator.includes("Bordeaux Métropole")
+        );
+        
+        // Check if this is an SNCF line
         if (line.operator === "SNCF") {
             const code = line.line_code.trim();
             const name = line.line_name.trim();
@@ -1034,21 +1035,32 @@ class TBMTransitMap {
         const code = line.line_code.trim();
         const name = line.line_name.trim();
 
-        const sortedTypes = Object.entries(this.lineTypes)
-            .filter(([type]) => type !== 'other' && type !== 'transgironde' && 
-                    !['tgv_inoui', 'tgv', 'ice', 'ter', 'ter_car', 'navette'].includes(type))
-            .sort((a, b) => a[1].order - b[1].order);
+        // For TBM lines, check TBM-specific patterns (tram, BRT, bus, school, night, ferry)
+        if (isTBM) {
+            const tbmTypes = Object.entries(this.lineTypes)
+                .filter(([type]) => ['tram', 'brt', 'bus', 'school', 'night', 'ferry'].includes(type))
+                .sort((a, b) => a[1].order - b[1].order);
 
-        for (const [type, config] of sortedTypes) {
-            for (const pattern of config.patterns) {
-                if (pattern.test(code) || pattern.test(name)) {
-                    if (type === 'bus') {
-                        if (/^[A-Z](\d+)?$/.test(code) && !/^[1-9]\d?/.test(code)) {
-                            continue;
+            for (const [type, config] of tbmTypes) {
+                for (const pattern of config.patterns) {
+                    if (pattern.test(code) || pattern.test(name)) {
+                        if (type === 'bus') {
+                            // Ensure it's actually a bus number, not a BRT letter
+                            if (/^[A-Z](\d+)?$/.test(code) && !/^[1-9]\d?/.test(code)) {
+                                continue;
+                            }
                         }
+                        return type;
                     }
-                    return type;
                 }
+            }
+        }
+        
+        // For regional operators (non-TBM, non-SNCF), check if it matches regional patterns
+        if (!isTBM && line.operator !== "SNCF") {
+            // Check for regional line patterns (3-4 digit codes are typically regional)
+            if (/^\d{3,4}$/.test(code)) {
+                return 'regional';
             }
         }
 
@@ -1056,17 +1068,38 @@ class TBMTransitMap {
     }
 
     getOperatorBadge(operator, short = false) {
-        if (operator === 'TransGironde') {
-            return short ? 
-                '<span class="operator-badge transgironde">TG</span>' :
-                '<span class="operator-badge transgironde">TransGironde</span>';
-        } else if (operator === 'SNCF') {
-            return short ?
-                '<span class="operator-badge sncf">SNCF</span>' :
-                '<span class="operator-badge sncf">SNCF</span>';
-        } else {
-            return '<span class="operator-badge">TBM</span>';
+        if (!operator) {
+            return '<span class="operator-badge">Unknown</span>';
         }
+        
+        // SNCF
+        if (operator === 'SNCF') {
+            return '<span class="operator-badge sncf">SNCF</span>';
+        }
+        
+        // TBM (including variations from New-Aquitaine feed)
+        if (operator === 'TBM' || operator.includes('TBM') || operator.includes('Bordeaux Métropole')) {
+            return '<span class="operator-badge tbm">TBM</span>';
+        }
+        
+        // Regional operators - use a consistent style and extract short name
+        const shortName = this.extractShortOperatorName(operator, short);
+        return `<span class="operator-badge regional">${shortName}</span>`;
+    }
+    
+    extractShortOperatorName(operator, useShort = false) {
+        if (!operator) return 'N/A';
+        
+        // If short form requested, try to extract acronym or first word
+        if (useShort) {
+            // Check for pattern like "YELO", "Calibus (Libourne)", "Bus2Go" -> extract first word/name
+            const match = operator.match(/^([A-Za-z0-9]+)(?:\s*\(|$)/);
+            if (match) {
+                return match[1];
+            }
+        }
+        
+        return operator;
     }
 
     groupLinesByType() {
@@ -1127,7 +1160,7 @@ class TBMTransitMap {
                     }
                 }
 
-                if (type === 'transgironde') {
+                if (type === 'regional') {
                     const numA = parseInt(codeA) || 0;
                     const numB = parseInt(codeB) || 0;
                     return numA - numB;

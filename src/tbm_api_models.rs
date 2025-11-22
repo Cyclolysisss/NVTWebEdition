@@ -15,7 +15,7 @@
 
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use gtfs_rt::FeedMessage;
 use prost::Message;
 use chrono::{TimeZone, Utc};
@@ -1093,16 +1093,34 @@ impl NVTModels {
     }
 
     fn parse_transgironde_from_cache(cache: GTFSCache) -> Result<(Vec<Stop>, Vec<Line>, GTFSCache)> {
+        // Build a map of stop_id -> set of route_ids that serve this stop
+        let mut stop_to_routes: HashMap<String, HashSet<String>> = HashMap::new();
+        
+        // Use stop_times and trips to determine which routes serve which stops
+        for (stop_id, stop_times) in &cache.stop_times {
+            for stop_time in stop_times {
+                if let Some(trip) = cache.trips.get(&stop_time.trip_id) {
+                    stop_to_routes.entry(stop_id.clone())
+                        .or_insert_with(HashSet::new)
+                        .insert(trip.route_id.clone());
+                }
+            }
+        }
+        
         let mut stops = Vec::new();
 
-        // Create stops
+        // Create stops with properly populated lines arrays
         for (stop_id, stop_name, lat, lon) in &cache.stops {
+            let lines: Vec<String> = stop_to_routes.get(stop_id)
+                .map(|set| set.iter().cloned().collect())
+                .unwrap_or_default();
+            
             stops.push(Stop {
                 stop_id: stop_id.clone(),
                 stop_name: stop_name.clone(),
                 latitude: *lat,
                 longitude: *lon,
-                lines: Vec::new(), // Will be populated when we process routes
+                lines, // Now populated with actual route_ids (unique by nature of HashSet)
                 alerts: Vec::new(),
                 real_time: Vec::new(),
             });
@@ -1397,16 +1415,34 @@ impl NVTModels {
     }
 
     fn parse_sncf_from_cache(cache: GTFSCache) -> Result<(Vec<Stop>, Vec<Line>, GTFSCache)> {
+        // Build a map of stop_id -> set of route_ids that serve this stop
+        let mut stop_to_routes: HashMap<String, HashSet<String>> = HashMap::new();
+        
+        // Use stop_times and trips to determine which routes serve which stops
+        for (stop_id, stop_times) in &cache.stop_times {
+            for stop_time in stop_times {
+                if let Some(trip) = cache.trips.get(&stop_time.trip_id) {
+                    stop_to_routes.entry(stop_id.clone())
+                        .or_insert_with(HashSet::new)
+                        .insert(trip.route_id.clone());
+                }
+            }
+        }
+        
         let mut stops = Vec::new();
 
-        // Create stops
+        // Create stops with properly populated lines arrays
         for (stop_id, stop_name, lat, lon) in &cache.stops {
+            let lines: Vec<String> = stop_to_routes.get(stop_id)
+                .map(|set| set.iter().cloned().collect())
+                .unwrap_or_default();
+            
             stops.push(Stop {
                 stop_id: stop_id.clone(),
                 stop_name: stop_name.clone(),
                 latitude: *lat,
                 longitude: *lon,
-                lines: Vec::new(),
+                lines, // Now populated with actual route_ids (unique by nature of HashSet)
                 alerts: Vec::new(),
                 real_time: Vec::new(),
             });
