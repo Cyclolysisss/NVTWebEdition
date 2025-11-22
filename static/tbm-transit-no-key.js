@@ -28,6 +28,12 @@ class TBMTransitMap {
         this.cachedStopGraph = null;
         this.cachedLinesByType = null;
 
+        // Spatial filtering and caching for memory optimization
+        this.fullNetworkData = null; // Complete dataset cached in memory
+        this.BUFFER_DISTANCE_KM = 10; // Load data within 10km of visible area
+        this.lastViewportBounds = null;
+        this.viewportUpdateDebounce = null;
+
         // Popup management
         this.currentPopup = null;
 
@@ -139,6 +145,195 @@ class TBMTransitMap {
 
         this.init();
     }
+
+    // ============================================================================
+    // Spatial Filtering Functions for Memory Optimization
+    // ============================================================================
+
+    /**
+     * Calculate distance between two points using Haversine formula
+     * @param {number} lat1 - Latitude of point 1
+     * @param {number} lon1 - Longitude of point 1
+     * @param {number} lat2 - Latitude of point 2
+     * @param {number} lon2 - Longitude of point 2
+     * @returns {number} Distance in kilometers
+     */
+    calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371; // Earth's radius in km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    /**
+     * Check if a point is within the viewport bounds plus buffer
+     * @param {number} lat - Point latitude
+     * @param {number} lon - Point longitude
+     * @param {object} bounds - Map bounds with buffer
+     * @returns {boolean} True if point is within bounds
+     */
+    isPointInBounds(lat, lon, bounds) {
+        return lat >= bounds.south && lat <= bounds.north &&
+               lon >= bounds.west && lon <= bounds.east;
+    }
+
+    /**
+     * Get current map viewport bounds with buffer
+     * @returns {object} Bounds object with north, south, east, west in degrees
+     */
+    getViewportBoundsWithBuffer() {
+        const bounds = this.map.getBounds();
+        const center = this.map.getCenter();
+        
+        // Calculate buffer in degrees (approximate: 1 degree ≈ 111km at equator)
+        // 10km buffer = ~0.09 degrees
+        const bufferDegrees = this.BUFFER_DISTANCE_KM / 111;
+        
+        return {
+            north: bounds.getNorth() + bufferDegrees,
+            south: bounds.getSouth() - bufferDegrees,
+            east: bounds.getEast() + bufferDegrees,
+            west: bounds.getWest() - bufferDegrees,
+            center: {lat: center.lat, lon: center.lng}
+        };
+    }
+
+    /**
+     * Filter stops based on viewport bounds
+     * @param {Array} allStops - Complete stops array
+     * @param {object} bounds - Viewport bounds with buffer
+     * @returns {Array} Filtered stops within bounds
+     */
+    filterStopsByViewport(allStops, bounds) {
+        if (!allStops || !bounds) return allStops || [];
+        
+        return allStops.filter(stop => 
+            this.isPointInBounds(stop.latitude, stop.longitude, bounds)
+        );
+    }
+
+    /**
+     * Filter lines to only include those with stops in viewport
+     * @param {Array} allLines - Complete lines array
+     * @param {Set} visibleStopIds - Set of stop IDs visible in viewport
+     * @returns {Array} Filtered lines
+     */
+    filterLinesByViewport(allLines, visibleStopIds) {
+        if (!allLines || !visibleStopIds || visibleStopIds.size === 0) return allLines || [];
+        
+        return allLines.filter(line => {
+            // Keep line if it has any stops in the visible area
+            // or if it has active real-time vehicles visible
+            const hasVisibleStops = line.lines && line.lines.some(stopId => visibleStopIds.has(stopId));
+            const hasVisibleVehicles = line.real_time && line.real_time.some(vehicle => {
+                if (!vehicle.latitude || !vehicle.longitude) return false;
+                const bounds = this.lastViewportBounds;
+                return this.isPointInBounds(vehicle.latitude, vehicle.longitude, bounds);
+            });
+            
+            return hasVisibleStops || hasVisibleVehicles;
+        });
+    }
+
+    /**
+     * Filter shapes to only include those for visible lines
+     * @param {object} allShapes - Complete shapes object
+     * @param {Array} visibleLines - Filtered lines array
+     * @returns {object} Filtered shapes
+     */
+    filterShapesByViewport(allShapes, visibleLines) {
+        if (!allShapes || !visibleLines) return allShapes || {};
+        
+        const visibleShapeIds = new Set();
+        visibleLines.forEach(line => {
+            if (line.shape_ids) {
+                line.shape_ids.forEach(shapeId => visibleShapeIds.add(shapeId));
+            }
+        });
+        
+        const filteredShapes = {};
+        visibleShapeIds.forEach(shapeId => {
+            if (allShapes[shapeId]) {
+                filteredShapes[shapeId] = allShapes[shapeId];
+            }
+        });
+        
+        return filteredShapes;
+    }
+
+    /**
+     * Apply spatial filtering to network data based on current viewport
+     */
+    updateVisibleNetworkData() {
+        if (!this.fullNetworkData) {
+            // No data loaded yet, nothing to filter
+            return;
+        }
+
+        const bounds = this.getViewportBoundsWithBuffer();
+        this.lastViewportBounds = bounds;
+
+        console.log('🗺️  Filtering network data for viewport...');
+        
+        // Filter stops first
+        const visibleStops = this.filterStopsByViewport(this.fullNetworkData.stops, bounds);
+        const visibleStopIds = new Set(visibleStops.map(s => s.stop_id));
+        
+        // Filter lines based on visible stops
+        const visibleLines = this.filterLinesByViewport(this.fullNetworkData.lines, visibleStopIds);
+        
+        // Filter shapes based on visible lines
+        const visibleShapes = this.filterShapesByViewport(this.fullNetworkData.shapes, visibleLines);
+        
+        // Update the networkData with filtered subset
+        this.networkData = {
+            stops: visibleStops,
+            lines: visibleLines,
+            shapes: visibleShapes
+        };
+        
+        console.log(`   ✅ Filtered to ${visibleStops.length}/${this.fullNetworkData.stops.length} stops, ` +
+                   `${visibleLines.length}/${this.fullNetworkData.lines.length} lines, ` +
+                   `${Object.keys(visibleShapes).length}/${Object.keys(this.fullNetworkData.shapes).length} shapes`);
+        
+        // Invalidate caches
+        this.cachedStopGraph = null;
+        this.cachedLinesByType = null;
+        
+        // Update map visualization
+        requestAnimationFrame(() => {
+            this.updateMap();
+            this.updateLineShapes();
+            this.updateLegend();
+            this.updateStats();
+        });
+    }
+
+    /**
+     * Setup viewport change listener for spatial filtering
+     */
+    setupViewportTracking() {
+        // Update visible data when map moves or zooms (with debounce)
+        this.map.on('moveend', () => {
+            if (this.viewportUpdateDebounce) {
+                clearTimeout(this.viewportUpdateDebounce);
+            }
+            
+            this.viewportUpdateDebounce = setTimeout(() => {
+                this.updateVisibleNetworkData();
+            }, 500); // 500ms debounce
+        });
+        
+        console.log('✅ Viewport-based spatial filtering enabled (10km buffer)');
+    }
+
+    // ============================================================================
+    // End Spatial Filtering Functions
+    // ============================================================================
 
     // Save user preferences to localStorage
     savePreferences() {
@@ -357,8 +552,11 @@ class TBMTransitMap {
 
         await new Promise(resolve => setTimeout(resolve, 50));
 
-        const startStop = this.networkData.stops.find(s => s.stop_id === startStopId);
-        const endStop = this.networkData.stops.find(s => s.stop_id === endStopId);
+        // Use full dataset for routing to ensure we can find routes even if stops aren't in current viewport
+        const searchData = this.fullNetworkData || this.networkData;
+        
+        const startStop = searchData.stops.find(s => s.stop_id === startStopId);
+        const endStop = searchData.stops.find(s => s.stop_id === endStopId);
 
         if (!startStop || !endStop) {
             console.error('❌ Start or end stop not found');
@@ -497,8 +695,11 @@ class TBMTransitMap {
         if (this.cachedStopGraph) return this.cachedStopGraph;
 
         const graph = new Map();
+        
+        // Use full dataset for routing graph to ensure complete connectivity
+        const graphData = this.fullNetworkData || this.networkData;
 
-        this.networkData.lines.forEach(line => {
+        graphData.lines.forEach(line => {
             const stops = this.getStopsOnLine(line.line_ref);
 
             stops.forEach((stop, index) => {
@@ -526,7 +727,10 @@ class TBMTransitMap {
     }
 
     getStopsOnLine(lineRef) {
-        const stops = this.networkData.stops.filter(stop =>
+        // Use full dataset to get all stops on a line
+        const graphData = this.fullNetworkData || this.networkData;
+        
+        const stops = graphData.stops.filter(stop =>
             stop.lines && stop.lines.includes(lineRef)
         );
         
@@ -1487,41 +1691,46 @@ class TBMTransitMap {
             const json = await response.json();
             console.log('✅ Raw API response received');
 
+            let fullData;
             if (json.success && json.data) {
-                this.networkData = json.data;
+                fullData = json.data;
             } else if (json.stops && json.lines) {
-                this.networkData = json;
+                fullData = json;
             } else {
                 throw new Error(json.error || 'Invalid response structure');
             }
 
-            if (!this.networkData.stops || !this.networkData.lines) {
+            if (!fullData.stops || !fullData.lines) {
                 throw new Error('Response missing stops or lines data');
             }
 
+            // Cache the complete dataset
+            this.fullNetworkData = fullData;
+
             const operators = {};
-            this.networkData.lines.forEach(line => {
+            this.fullNetworkData.lines.forEach(line => {
                 operators[line.operator] = (operators[line.operator] || 0) + 1;
             });
 
-            console.log('📊 Network data loaded:');
-            console.log(`   • ${this.networkData.stops.length} stops`);
-            console.log(`   • ${this.networkData.lines.length} lines`);
+            console.log('📊 Full network data cached:');
+            console.log(`   • ${this.fullNetworkData.stops.length} stops`);
+            console.log(`   • ${this.fullNetworkData.lines.length} lines`);
             Object.entries(operators).forEach(([op, count]) => {
                 console.log(`     - ${op}: ${count} lines`);
             });
-            console.log(`   • ${this.networkData.shapes ? Object.keys(this.networkData.shapes).length : 0} shapes`);
+            console.log(`   • ${this.fullNetworkData.shapes ? Object.keys(this.fullNetworkData.shapes).length : 0} shapes`);
 
-            this.cachedStopGraph = null;
-            this.cachedLinesByType = null;
+            // Enable viewport-based spatial filtering
+            if (!this.viewportTrackingSetup) {
+                this.setupViewportTracking();
+                this.viewportTrackingSetup = true;
+            }
 
-            requestAnimationFrame(() => {
-                this.updateMap();
-                this.updateLineShapes();
-                this.updateLegend();
-                this.updateStats();
-                this.showUpdateIndicator();
-            });
+            // Apply initial spatial filtering based on current viewport
+            this.updateVisibleNetworkData();
+            
+            // Show update indicator
+            this.showUpdateIndicator();
         } catch (error) {
             console.error('❌ Error loading network data:', error);
             this.showError(`Failed to load network data: ${error.message}`);
@@ -1994,7 +2203,10 @@ class TBMTransitMap {
     }
 
     focusOnStop(stopId) {
-        const stop = this.networkData.stops.find(s => s.stop_id === stopId);
+        // Search in full dataset first, then fallback to filtered view
+        const searchData = this.fullNetworkData || this.networkData;
+        const stop = searchData.stops.find(s => s.stop_id === stopId);
+        
         if (!stop) return;
 
         this.map.flyTo({
@@ -2272,12 +2484,15 @@ class TBMTransitMap {
 
         const lowerQuery = query.toLowerCase();
 
-        const matchingStops = this.networkData.stops.filter(stop =>
+        // Search in the full dataset, not just the filtered viewport
+        const searchData = this.fullNetworkData || this.networkData;
+        
+        const matchingStops = searchData.stops.filter(stop =>
             stop.stop_name.toLowerCase().includes(lowerQuery) ||
             stop.stop_id.toLowerCase().includes(lowerQuery)
         );
 
-        const matchingLines = this.networkData.lines.filter(line =>
+        const matchingLines = searchData.lines.filter(line =>
             line.line_name.toLowerCase().includes(lowerQuery) ||
             line.line_code.toLowerCase().includes(lowerQuery)
         );

@@ -1106,16 +1106,19 @@ impl NVTModels {
             }
         }
         
-        // Identify TBM routes by checking agency names
-        // TBM agency name in the aggregated feed is "TBM (Bordeaux Métropole)"
+        // Identify TBM routes by checking agency IDs
+        // TBM agency in the aggregated feed: BORDEAUX_METROPOLE:Operator:TBM with name "TBM (Bordeaux Métropole)"
         let mut tbm_route_ids = HashSet::new();
         for (route_id, agency_id) in &cache.route_agencies {
-            if let Some(agency) = cache.agencies.get(agency_id) {
-                // Match TBM agency exactly or by prefix to avoid false positives
-                let agency_name = &agency.agency_name;
-                if agency_name == "TBM" || agency_name.starts_with("TBM (") {
-                    tbm_route_ids.insert(route_id.clone());
-                }
+            // Match by agency_id (most precise) or agency_name (fallback)
+            let is_tbm = agency_id == "BORDEAUX_METROPOLE:Operator:TBM" || 
+                         agency_id.contains(":Operator:TBM") ||
+                         cache.agencies.get(agency_id)
+                             .map(|a| a.agency_name == "TBM" || a.agency_name.starts_with("TBM ("))
+                             .unwrap_or(false);
+            
+            if is_tbm {
+                tbm_route_ids.insert(route_id.clone());
             }
         }
         
@@ -1168,8 +1171,14 @@ impl NVTModels {
             };
             
             // Skip TBM lines as they are already loaded from the SIRI-Lite API with real-time data
-            // TBM is included in the New-Aquitaine aggregated GTFS feed, which would cause duplicates
-            if operator.contains("TBM") {
+            // TBM is included in the New-Aquitaine aggregated GTFS feed (agency_id: BORDEAUX_METROPOLE:Operator:TBM)
+            // which would cause duplicates
+            let is_tbm = operator == "TBM" || 
+                         operator.starts_with("TBM (") ||
+                         agency_id.map(|id| id == "BORDEAUX_METROPOLE:Operator:TBM" || id.contains(":Operator:TBM"))
+                             .unwrap_or(false);
+            
+            if is_tbm {
                 continue;
             }
             
