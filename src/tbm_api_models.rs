@@ -2375,8 +2375,18 @@ impl NVTModels {
             // Only add if the route has shapes (visual representation)
             if let Some(shape_ids) = gtfs_cache.route_to_shapes.get(route_id) {
                 if !shape_ids.is_empty() {
-                    // Extract line code from route_id (format: "TBM:Line:CODE" -> "CODE")
-                    let line_code = route_id.split(':').last().unwrap_or(route_id);
+                    // Extract line code from route_id with multiple fallback strategies
+                    // Examples: "TBM:Line:A" -> "A", "A" -> "A", "12" -> "12"
+                    let line_code = if let Some(extracted) = Self::extract_line_id(route_id) {
+                        // Format: "TBM:Line:CODE" -> extract CODE
+                        extracted
+                    } else if let Some(last_part) = route_id.split(':').last() {
+                        // Format: "XXX:YYY" -> use YYY, or "CODE" -> use CODE
+                        last_part
+                    } else {
+                        // Fallback: use full route_id (shouldn't happen as split always returns at least one element)
+                        route_id
+                    };
                     
                     lines.push(Line {
                         line_ref: format!("TBM:Line:{}", line_code),
