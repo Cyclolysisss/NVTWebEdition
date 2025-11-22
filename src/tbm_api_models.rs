@@ -802,6 +802,15 @@ impl NVTModels {
     }
 
     fn parse_transgironde_stops(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<Vec<(String, String, f64, f64)>> {
+        // GTFS stops.txt field indices
+        const STOP_ID_INDEX: usize = 0;
+        const STOP_NAME_INDEX: usize = 1;
+        const STOP_LAT_INDEX: usize = 2;
+        const STOP_LON_INDEX: usize = 3;
+        // const STOP_CODE_INDEX: usize = 4;
+        // const STOP_DESC_INDEX: usize = 5;
+        // const LOCATION_TYPE_INDEX: usize = 6;
+        
         let mut stops_file = archive.by_name("stops.txt")
             .map_err(|e| NVTError::FileError(format!("stops.txt not found: {}", e)))?;
 
@@ -817,9 +826,9 @@ impl NVTModels {
         for result in rdr.records() {
             if let Ok(record) = result {
                 // GTFS stops.txt format: stop_id, stop_name, stop_lat, stop_lon, stop_code, stop_desc, location_type, ...
-                // Indices: 0=stop_id, 1=stop_name, 2=stop_lat, 3=stop_lon, 4=stop_code, 5=stop_desc, 6=location_type
                 if let (Some(stop_id), Some(stop_name), Some(lat_str), Some(lon_str)) =
-                    (record.get(0), record.get(1), record.get(2), record.get(3)) {
+                    (record.get(STOP_ID_INDEX), record.get(STOP_NAME_INDEX), 
+                     record.get(STOP_LAT_INDEX), record.get(STOP_LON_INDEX)) {
 
                     // Note: In the New-Aquitaine GTFS feed, location_type=1 (stations) are the primary stops
                     // used for routing, not just parent groupings. We include all stops with valid coordinates.

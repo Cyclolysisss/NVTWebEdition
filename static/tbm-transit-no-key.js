@@ -31,6 +31,8 @@ class TBMTransitMap {
         // Spatial filtering and caching for memory optimization
         this.fullNetworkData = null; // Complete dataset cached in memory
         this.BUFFER_DISTANCE_KM = 10; // Load data within 10km of visible area
+        this.APPROX_KM_PER_DEGREE = 111; // Approximate kilometers per degree at equator
+        this.VIEWPORT_UPDATE_DEBOUNCE_MS = 500; // Debounce time for viewport updates
         this.lastViewportBounds = null;
         this.viewportUpdateDebounce = null;
 
@@ -189,9 +191,8 @@ class TBMTransitMap {
         const bounds = this.map.getBounds();
         const center = this.map.getCenter();
         
-        // Calculate buffer in degrees (approximate: 1 degree ≈ 111km at equator)
-        // 10km buffer = ~0.09 degrees
-        const bufferDegrees = this.BUFFER_DISTANCE_KM / 111;
+        // Calculate buffer in degrees using approximate conversion
+        const bufferDegrees = this.BUFFER_DISTANCE_KM / this.APPROX_KM_PER_DEGREE;
         
         return {
             north: bounds.getNorth() + bufferDegrees,
@@ -325,7 +326,7 @@ class TBMTransitMap {
             
             this.viewportUpdateDebounce = setTimeout(() => {
                 this.updateVisibleNetworkData();
-            }, 500); // 500ms debounce
+            }, this.VIEWPORT_UPDATE_DEBOUNCE_MS);
         });
         
         console.log('✅ Viewport-based spatial filtering enabled (10km buffer)');
