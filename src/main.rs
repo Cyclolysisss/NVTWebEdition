@@ -339,6 +339,40 @@ async fn get_stop_schedule(
     }
 }
 
+async fn get_vehicle_details(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let vehicle_id = path.into_inner();
+
+    match state.cache.lock() {
+        Ok(cache) => {
+            let vehicle_details = NVTModels::get_vehicle_details(&vehicle_id, &cache);
+            
+            match vehicle_details {
+                Some(details) => {
+                    println!("🚗 Vehicle details retrieved: {}", vehicle_id);
+                    HttpResponse::Ok().json(ApiResponse::success(details))
+                }
+                None => {
+                    println!("⚠️  Vehicle not found: {}", vehicle_id);
+                    HttpResponse::NotFound()
+                        .json(ApiResponse::<String>::error(
+                            format!("Vehicle '{}' not found", vehicle_id)
+                        ))
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to lock cache: {}", e);
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(
+                    "Failed to retrieve vehicle details".to_string()
+                ))
+        }
+    }
+}
+
 async fn health_check() -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "healthy",
@@ -494,6 +528,7 @@ async fn run_server(cache: CachedNetworkData) -> std::io::Result<()> {
                     .route("/alerts", web::get().to(get_alerts))
                     .route("/stop/{id}", web::get().to(get_stop_by_id))
                     .route("/stop/{id}/schedule", web::get().to(get_stop_schedule))
+                    .route("/vehicle/{id}", web::get().to(get_vehicle_details))
                     .route("/line/{code}", web::get().to(get_line_by_code))
                     .route("/operator/{name}", web::get().to(get_lines_by_operator))
                     .route("/operators", web::get().to(get_operators))
