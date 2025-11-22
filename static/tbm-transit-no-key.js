@@ -20,6 +20,7 @@ class TBMTransitMap {
         // Vehicle tracking
         this.trackedVehicle = null;
         this.vehicleTrackingInterval = null;
+        this.VEHICLE_TRACKING_INTERVAL_MS = 10000; // 10 seconds
 
         // Performance optimizations
         this.searchDebounceTimer = null;
@@ -2341,7 +2342,7 @@ class TBMTransitMap {
             
             this.vehicleTrackingInterval = setInterval(() => {
                 this.updateTrackedVehicle(vehicleId);
-            }, 10000); // Update every 10 seconds
+            }, this.VEHICLE_TRACKING_INTERVAL_MS);
             
         } catch (error) {
             console.error('Failed to track vehicle:', error);
@@ -2365,6 +2366,7 @@ class TBMTransitMap {
             }
         } catch (error) {
             console.error('Failed to update tracked vehicle:', error);
+            this.showNotification('⚠️ Failed to update vehicle', 'error');
         }
     }
 

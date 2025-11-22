@@ -1424,6 +1424,13 @@ impl NVTModels {
         Ok(lines)
     }
 
+    fn create_http_client() -> Result<blocking::Client> {
+        blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))
+    }
+
     fn fetch_alerts() -> Result<Vec<AlertInfo>> {
         let url = format!(
             "{}/gtfsfeed/alerts/bordeaux?apiKey={}",
@@ -1431,10 +1438,7 @@ impl NVTModels {
             Self::API_KEY
         );
 
-        let client = blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+        let client = Self::create_http_client()?;
 
         let response = client.get(&url)
             .send()
@@ -1514,10 +1518,7 @@ impl NVTModels {
             Self::API_KEY
         );
 
-        let client = blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+        let client = Self::create_http_client()?;
 
         let response = client.get(&url)
             .send()
@@ -1596,10 +1597,7 @@ impl NVTModels {
             Self::API_KEY
         );
 
-        let client = blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+        let client = Self::create_http_client()?;
 
         let response = client.get(&url)
             .send()
@@ -1621,10 +1619,7 @@ impl NVTModels {
     }
 
     fn fetch_sncf_trip_updates() -> Result<Vec<gtfs_rt::TripUpdate>> {
-        let client = blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+        let client = Self::create_http_client()?;
 
         let response = client.get(Self::SNCF_GTFS_RT_TRIP_UPDATES_URL)
             .send()
@@ -1650,10 +1645,7 @@ impl NVTModels {
     }
 
     fn fetch_sncf_alerts() -> Result<Vec<AlertInfo>> {
-        let client = blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| NVTError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+        let client = Self::create_http_client()?;
 
         let response = client.get(Self::SNCF_GTFS_RT_SERVICE_ALERTS_URL)
             .send()
@@ -2308,11 +2300,10 @@ impl NVTModels {
         // Keep only the first occurrence of each unique combination
         let mut seen = std::collections::HashSet::new();
         scheduled_arrivals.retain(|arrival| {
-            let key = format!(
-                "{}:{}:{}",
-                arrival.line_code,
-                arrival.arrival_time,
-                arrival.destination.as_deref().unwrap_or("")
+            let key = (
+                arrival.line_code.clone(),
+                arrival.arrival_time.clone(),
+                arrival.destination.clone().unwrap_or_default()
             );
             seen.insert(key)
         });
