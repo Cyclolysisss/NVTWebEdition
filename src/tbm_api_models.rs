@@ -1107,10 +1107,13 @@ impl NVTModels {
         }
         
         // Identify TBM routes by checking agency names
+        // TBM agency name in the aggregated feed is "TBM (Bordeaux Métropole)"
         let mut tbm_route_ids = HashSet::new();
         for (route_id, agency_id) in &cache.route_agencies {
             if let Some(agency) = cache.agencies.get(agency_id) {
-                if agency.agency_name.contains("TBM") {
+                // Match TBM agency exactly or by prefix to avoid false positives
+                let agency_name = &agency.agency_name;
+                if agency_name == "TBM" || agency_name.starts_with("TBM (") {
                     tbm_route_ids.insert(route_id.clone());
                 }
             }
