@@ -1,6 +1,6 @@
-// API models and data fetching for TBM (Transports Bordeaux Métropole) and TransGironde
+// API models and data fetching for TBM (Transports Bordeaux Métropole), New-Aquitaine Regional Networks, and SNCF
 // TBM Official website: https://www.infotbm.com/
-// TransGironde Official website: https://www.transgironde.fr/
+// New-Aquitaine Region Official website: https://www.nouvelle-aquitaine.fr/
 //
 // TBM API Endpoints:
 // - Stop Discovery SIRI-Lite: https://bdx.mecatran.com/utw/ws/siri/2.0/bordeaux/stoppoints-discovery.json
@@ -9,8 +9,9 @@
 // - GTFS-RT Alerts: https://bdx.mecatran.com/utw/ws/gtfsfeed/alerts/bordeaux
 // - GTFS-RT Trip Updates: https://bdx.mecatran.com/utw/ws/gtfsfeed/realtime/bordeaux
 //
-// TransGironde Data:
-// - GTFS Static: https://www.pigma.org/public/opendata/nouvelle_aquitaine_mobilites/publication/gironde-aggregated-gtfs.zip
+// New-Aquitaine Regional Networks Data:
+// - GTFS Static (Aggregated): https://www.pigma.org/public/opendata/nouvelle_aquitaine_mobilites/publication/naq-aggregated-gtfs.zip
+// - Includes 50+ transit operators across the New-Aquitaine region
 
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
@@ -176,7 +177,7 @@ pub struct Line {
     pub real_time: Vec<RealTimeInfo>,
     pub color: String,
     pub shape_ids: Vec<String>,
-    pub operator: String, // "TBM" or "TransGironde"
+    pub operator: String, // Operator name (e.g., "TBM", "YELO", "Calibus (Libourne)", "STCLM (Limoges Métropole)", etc.)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -187,7 +188,7 @@ pub struct NetworkData {
 }
 
 // ============================================================================
-// GTFS Cache Structure (15-day persistence for TBM, 30-day for TransGironde)
+// GTFS Cache Structure (15-day persistence for TBM, 30-day for New-Aquitaine and SNCF)
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,7 +205,7 @@ pub struct GTFSCache {
     pub route_agencies: HashMap<String, String>, // key: route_id, value: agency_id
     pub transfers: Vec<Transfer>,
     pub cached_at: u64,
-    pub source: String, // "TBM" or "TransGironde" or "NewAquitaine"
+    pub source: String, // "TBM", "NewAquitaine", or "SNCF"
 }
 
 impl GTFSCache {
@@ -289,7 +290,7 @@ pub struct CachedNetworkData {
     pub tbm_lines_metadata: Vec<(String, String, String, Vec<(String, String)>)>,
     pub tbm_gtfs_cache: GTFSCache,
 
-    // TransGironde Data
+    // New-Aquitaine Regional Networks Data (variable names kept as "transgironde" for backward compatibility)
     pub transgironde_stops: Vec<Stop>,
     pub transgironde_lines: Vec<Line>,
     pub transgironde_gtfs_cache: GTFSCache,
@@ -324,7 +325,7 @@ impl CachedNetworkData {
             &self.tbm_lines_metadata,
         );
 
-        // Add TransGironde stops
+        // Add New-Aquitaine stops
         all_stops.extend(self.transgironde_stops.clone());
 
         // Add SNCF stops
@@ -337,7 +338,7 @@ impl CachedNetworkData {
             &self.tbm_gtfs_cache,
         );
 
-        // Add TransGironde lines
+        // Add New-Aquitaine lines
         all_lines.extend(self.transgironde_lines.clone());
 
         // Add SNCF lines
@@ -522,7 +523,7 @@ impl NVTModels {
 
         println!("\n✓ Cache initialized successfully!");
         println!("  • TBM: {} stops, {} lines", tbm_stops.len(), tbm_lines.len());
-        println!("  • TransGironde: {} stops, {} lines", transgironde_stops.len(), transgironde_lines.len());
+        println!("  • New-Aquitaine: {} stops, {} lines", transgironde_stops.len(), transgironde_lines.len());
         println!("  • SNCF: {} stops, {} lines", sncf_stops.len(), sncf_lines.len());
         println!("  • {} vehicles tracked, {} alerts", real_time.len(), alerts.len());
 
@@ -633,7 +634,8 @@ impl NVTModels {
     }
 
     // ============================================================================
-    // TransGironde GTFS Loading
+    // New-Aquitaine Regional Networks GTFS Loading
+    // (Function name kept as "load_transgironde_data" for backward compatibility)
     // ============================================================================
 
     fn load_transgironde_data() -> Result<(Vec<Stop>, Vec<Line>, GTFSCache)> {
@@ -2321,10 +2323,10 @@ impl NVTModels {
         format!(
             "📊 Cache Statistics:\n\
              • TBM: {} stops, {} lines\n\
-             • TransGironde: {} stops, {} lines\n\
+             • New-Aquitaine: {} stops, {} lines\n\
              • SNCF: {} stops, {} lines\n\
              • TBM Colors: {} | TBM Shapes: {}\n\
-             • TransGironde Colors: {} | TransGironde Shapes: {}\n\
+             • New-Aquitaine Colors: {} | New-Aquitaine Shapes: {}\n\
              • SNCF Colors: {} | SNCF Shapes: {}\n\
              • Vehicles tracked: {} | Alerts: {}\n\
              • Static data age: {}s | Dynamic data age: {}s\n\
