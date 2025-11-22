@@ -117,6 +117,23 @@ pub struct CalendarDate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Agency {
+    pub agency_id: String,
+    pub agency_name: String,
+    pub agency_url: String,
+    pub agency_timezone: String,
+    pub agency_phone: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Transfer {
+    pub from_stop_id: String,
+    pub to_stop_id: String,
+    pub transfer_type: u32,
+    pub min_transfer_time: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledArrival {
     pub trip_id: String,
     pub route_id: String,
@@ -183,8 +200,11 @@ pub struct GTFSCache {
     pub trips: HashMap<String, Trip>, // key: trip_id, value: trip info
     pub calendar: HashMap<String, ServiceCalendar>, // key: service_id
     pub calendar_dates: HashMap<String, Vec<CalendarDate>>, // key: service_id
+    pub agencies: HashMap<String, Agency>, // key: agency_id, value: agency info
+    pub route_agencies: HashMap<String, String>, // key: route_id, value: agency_id
+    pub transfers: Vec<Transfer>,
     pub cached_at: u64,
-    pub source: String, // "TBM" or "TransGironde"
+    pub source: String, // "TBM" or "TransGironde" or "NewAquitaine"
 }
 
 impl GTFSCache {
@@ -370,7 +390,7 @@ pub struct NVTModels;
 impl NVTModels {
     const API_KEY: &'static str = "opendata-bordeaux-metropole-flux-gtfs-rt";
     const BASE_URL: &'static str = "https://bdx.mecatran.com/utw/ws";
-    const TRANSGIRONDE_GTFS_URL: &'static str = "https://www.pigma.org/public/opendata/nouvelle_aquitaine_mobilites/publication/gironde-aggregated-gtfs.zip";
+    const TRANSGIRONDE_GTFS_URL: &'static str = "https://www.pigma.org/public/opendata/nouvelle_aquitaine_mobilites/publication/naq-aggregated-gtfs.zip";
     const SNCF_GTFS_URL: &'static str = "https://eu.ftp.opendatasoft.com/sncf/plandata/Export_OpenData_SNCF_GTFS_NewTripId.zip";
     const SNCF_GTFS_RT_TRIP_UPDATES_URL: &'static str = "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-trip-updates";
     const SNCF_GTFS_RT_SERVICE_ALERTS_URL: &'static str = "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-service-alerts";
@@ -405,6 +425,9 @@ impl NVTModels {
                 trips: HashMap::new(),
                 calendar: HashMap::new(),
                 calendar_dates: HashMap::new(),
+                agencies: HashMap::new(),
+                route_agencies: HashMap::new(),
+                transfers: Vec::new(),
                 cached_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
@@ -415,11 +438,11 @@ impl NVTModels {
         println!("   ✓ Loaded {} TBM line colors", tbm_gtfs_cache.routes.len());
 
         // Load TransGironde data
-        println!("\n🚌 Loading TransGironde data...");
+        println!("\n🚌 Loading New-Aquitaine data...");
         let (transgironde_stops, transgironde_lines, transgironde_gtfs_cache) =
             Self::load_transgironde_data().unwrap_or_else(|e| {
-                println!("   ⚠️  Warning: Could not load TransGironde data ({})", e);
-                println!("   Continuing without TransGironde...");
+                println!("   ⚠️  Warning: Could not load New-Aquitaine data ({})", e);
+                println!("   Continuing without New-Aquitaine...");
                 (Vec::new(), Vec::new(), GTFSCache {
                     routes: HashMap::new(),
                     stops: Vec::new(),
@@ -429,16 +452,19 @@ impl NVTModels {
                     trips: HashMap::new(),
                     calendar: HashMap::new(),
                     calendar_dates: HashMap::new(),
+                    agencies: HashMap::new(),
+                    route_agencies: HashMap::new(),
+                    transfers: Vec::new(),
                     cached_at: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs(),
-                    source: "TransGironde".to_string(),
+                    source: "NewAquitaine".to_string(),
                 })
             });
-        println!("   ✓ Loaded {} TransGironde stops", transgironde_stops.len());
-        println!("   ✓ Loaded {} TransGironde lines", transgironde_lines.len());
-        println!("   ✓ Loaded {} TransGironde shapes", transgironde_gtfs_cache.shapes.len());
+        println!("   ✓ Loaded {} New-Aquitaine stops", transgironde_stops.len());
+        println!("   ✓ Loaded {} New-Aquitaine lines", transgironde_lines.len());
+        println!("   ✓ Loaded {} New-Aquitaine shapes", transgironde_gtfs_cache.shapes.len());
 
         // Load SNCF data
         println!("\n🚄 Loading SNCF data...");
@@ -455,6 +481,9 @@ impl NVTModels {
                     trips: HashMap::new(),
                     calendar: HashMap::new(),
                     calendar_dates: HashMap::new(),
+                    agencies: HashMap::new(),
+                    route_agencies: HashMap::new(),
+                    transfers: Vec::new(),
                     cached_at: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -608,11 +637,11 @@ impl NVTModels {
     // ============================================================================
 
     fn load_transgironde_data() -> Result<(Vec<Stop>, Vec<Line>, GTFSCache)> {
-        if let Some(cache) = GTFSCache::load("TransGironde", 30) {
+        if let Some(cache) = GTFSCache::load("NewAquitaine", 30) {
             return Self::parse_transgironde_from_cache(cache);
         }
 
-        println!("📥 Downloading TransGironde GTFS data...");
+        println!("📥 Downloading New-Aquitaine GTFS data...");
 
         let client = blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS))
@@ -621,7 +650,7 @@ impl NVTModels {
 
         let response = client.get(Self::TRANSGIRONDE_GTFS_URL)
             .send()
-            .map_err(|e| NVTError::NetworkError(format!("Failed to download TransGironde GTFS: {}", e)))?;
+            .map_err(|e| NVTError::NetworkError(format!("Failed to download New-Aquitaine GTFS: {}", e)))?;
 
         if !response.status().is_success() {
             return Err(NVTError::NetworkError(format!("Download failed with status: {}", response.status())));
@@ -636,17 +665,21 @@ impl NVTModels {
         let mut archive = ZipArchive::new(cursor)
             .map_err(|e| NVTError::ParseError(format!("Failed to open GTFS zip: {}", e)))?;
 
-        // Parse routes.txt
-        let routes = Self::parse_transgironde_routes(&mut archive)?;
-        println!("   ✓ Parsed {} TransGironde routes", routes.len());
+        // Parse agency.txt first to get operator information
+        let agencies = Self::parse_agencies(&mut archive)?;
+        println!("   ✓ Parsed {} agencies", agencies.len());
+
+        // Parse routes.txt with agency_id
+        let (routes, route_agencies) = Self::parse_transgironde_routes(&mut archive)?;
+        println!("   ✓ Parsed {} New-Aquitaine routes", routes.len());
 
         // Parse stops.txt
         let stops_data = Self::parse_transgironde_stops(&mut archive)?;
-        println!("   ✓ Parsed {} TransGironde stops", stops_data.len());
+        println!("   ✓ Parsed {} New-Aquitaine stops", stops_data.len());
 
         // Parse shapes.txt
         let shapes = Self::parse_transgironde_shapes(&mut archive)?;
-        println!("   ✓ Parsed {} TransGironde shapes", shapes.len());
+        println!("   ✓ Parsed {} New-Aquitaine shapes", shapes.len());
 
         // Parse trips.txt to map routes to shapes
         let route_to_shapes = Self::parse_transgironde_trips(&mut archive)?;
@@ -668,6 +701,10 @@ impl NVTModels {
         let calendar_dates = Self::parse_calendar_dates(&mut archive)?;
         println!("   ✓ Parsed {} calendar date exceptions", calendar_dates.values().map(|v| v.len()).sum::<usize>());
 
+        // Parse transfers.txt
+        let transfers = Self::parse_transfers(&mut archive)?;
+        println!("   ✓ Parsed {} transfers", transfers.len());
+
         let gtfs_cache = GTFSCache {
             routes,
             stops: stops_data.clone(),
@@ -677,11 +714,14 @@ impl NVTModels {
             trips,
             calendar,
             calendar_dates,
+            agencies,
+            route_agencies,
+            transfers,
             cached_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            source: "TransGironde".to_string(),
+            source: "NewAquitaine".to_string(),
         };
 
         if let Err(e) = gtfs_cache.save() {
@@ -691,7 +731,37 @@ impl NVTModels {
         Self::parse_transgironde_from_cache(gtfs_cache)
     }
 
-    fn parse_transgironde_routes(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<HashMap<String, String>> {
+    fn parse_agencies(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<HashMap<String, Agency>> {
+        let mut agencies_map = HashMap::new();
+
+        if let Ok(mut agencies_file) = archive.by_name("agency.txt") {
+            let mut agencies_contents = String::new();
+            agencies_file.read_to_string(&mut agencies_contents).ok();
+            drop(agencies_file);
+
+            let mut rdr = csv::Reader::from_reader(agencies_contents.as_bytes());
+
+            for result in rdr.records() {
+                if let Ok(record) = result {
+                    // agency_id,agency_name,agency_url,agency_timezone,agency_phone
+                    if let (Some(agency_id), Some(agency_name), Some(agency_url), Some(agency_timezone), Some(agency_phone)) =
+                        (record.get(0), record.get(1), record.get(2), record.get(3), record.get(4)) {
+                        agencies_map.insert(agency_id.to_string(), Agency {
+                            agency_id: agency_id.to_string(),
+                            agency_name: agency_name.to_string(),
+                            agency_url: agency_url.to_string(),
+                            agency_timezone: agency_timezone.to_string(),
+                            agency_phone: agency_phone.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(agencies_map)
+    }
+
+    fn parse_transgironde_routes(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<(HashMap<String, String>, HashMap<String, String>)> {
         let mut routes_file = archive.by_name("routes.txt")
             .map_err(|e| NVTError::FileError(format!("routes.txt not found: {}", e)))?;
 
@@ -702,20 +772,31 @@ impl NVTModels {
         drop(routes_file);
 
         let mut color_map = HashMap::new();
+        let mut route_agencies = HashMap::new();
         let mut rdr = csv::Reader::from_reader(routes_contents.as_bytes());
 
         for result in rdr.records() {
             if let Ok(record) = result {
-                // route_id, route_short_name, route_long_name, route_color
-                if let (Some(route_id), Some(route_color)) = (record.get(0), record.get(7)) {
-                    if !route_color.is_empty() && route_color.len() == 6 {
-                        color_map.insert(route_id.to_string(), route_color.to_string());
+                // route_id,agency_id,route_short_name,route_long_name,route_desc,route_type,route_url,route_color,route_text_color
+                if let Some(route_id) = record.get(0) {
+                    // Store agency_id if present
+                    if let Some(agency_id) = record.get(1) {
+                        if !agency_id.is_empty() {
+                            route_agencies.insert(route_id.to_string(), agency_id.to_string());
+                        }
+                    }
+                    
+                    // Store route color
+                    if let Some(route_color) = record.get(7) {
+                        if !route_color.is_empty() && route_color.len() == 6 {
+                            color_map.insert(route_id.to_string(), route_color.to_string());
+                        }
                     }
                 }
             }
         }
 
-        Ok(color_map)
+        Ok((color_map, route_agencies))
     }
 
     fn parse_transgironde_stops(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<Vec<(String, String, f64, f64)>> {
@@ -771,7 +852,8 @@ impl NVTModels {
 
             for result in shapes_rdr.records() {
                 if let Ok(record) = result {
-                    if let (Some(shape_id), Some(lat_str), Some(lon_str), Some(seq_str)) =
+                    // shape_id,shape_pt_sequence,shape_pt_lat,shape_pt_lon
+                    if let (Some(shape_id), Some(seq_str), Some(lat_str), Some(lon_str)) =
                         (record.get(0), record.get(1), record.get(2), record.get(3)) {
                         if let (Ok(lat), Ok(lon), Ok(seq)) =
                             (lat_str.parse::<f64>(), lon_str.parse::<f64>(), seq_str.parse::<u32>()) {
@@ -974,9 +1056,42 @@ impl NVTModels {
         Ok(calendar_dates_map)
     }
 
+    fn parse_transfers(archive: &mut ZipArchive<Cursor<bytes::Bytes>>) -> Result<Vec<Transfer>> {
+        let mut transfers = Vec::new();
+
+        if let Ok(mut transfers_file) = archive.by_name("transfers.txt") {
+            let mut contents = String::new();
+            transfers_file.read_to_string(&mut contents).ok();
+            drop(transfers_file);
+
+            let mut rdr = csv::Reader::from_reader(contents.as_bytes());
+
+            for result in rdr.records() {
+                if let Ok(record) = result {
+                    // from_stop_id,to_stop_id,transfer_type,min_transfer_time
+                    if let (Some(from_stop_id), Some(to_stop_id), Some(transfer_type)) =
+                        (record.get(0), record.get(1), record.get(2)) {
+                        if let Ok(trans_type) = transfer_type.parse::<u32>() {
+                            let min_transfer_time = record.get(3)
+                                .and_then(|s| s.parse::<u32>().ok());
+
+                            transfers.push(Transfer {
+                                from_stop_id: from_stop_id.to_string(),
+                                to_stop_id: to_stop_id.to_string(),
+                                transfer_type: trans_type,
+                                min_transfer_time,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(transfers)
+    }
+
     fn parse_transgironde_from_cache(cache: GTFSCache) -> Result<(Vec<Stop>, Vec<Line>, GTFSCache)> {
         let mut stops = Vec::new();
-        let mut stops_by_parent: HashMap<String, Vec<String>> = HashMap::new();
 
         // Create stops
         for (stop_id, stop_name, lat, lon) in &cache.stops {
@@ -994,8 +1109,24 @@ impl NVTModels {
         // Create lines from routes
         let mut lines = Vec::new();
         for (route_id, color) in &cache.routes {
+            // Get the agency_id for this route, if available
+            let agency_id = cache.route_agencies.get(route_id);
+            
+            // Get the operator name from the agency, or use a default
+            let operator = if let Some(aid) = agency_id {
+                if let Some(agency) = cache.agencies.get(aid) {
+                    // Extract short operator name from agency_name
+                    // Format: "Calibus (Libourne)" or "TBM (Bordeaux Métropole)"
+                    agency.agency_name.clone()
+                } else {
+                    "New-Aquitaine".to_string()
+                }
+            } else {
+                "New-Aquitaine".to_string()
+            };
+            
             // Extract route short name from route_id
-            // Format: "GIRONDE:Line:2743" -> "414" (from routes.txt)
+            // Format: "CA_DU_LIBOURNAIS:Line:XXX" -> "XXX"
             let line_code = route_id.split(':').last().unwrap_or(route_id);
 
             let shape_ids = cache.route_to_shapes.get(route_id)
@@ -1004,7 +1135,7 @@ impl NVTModels {
 
             lines.push(Line {
                 line_ref: route_id.clone(),
-                line_name: format!("TransGironde {}", line_code),
+                line_name: format!("{} {}", operator, line_code),
                 line_code: line_code.to_string(),
                 route_id: route_id.clone(),
                 destinations: Vec::new(),
@@ -1012,7 +1143,7 @@ impl NVTModels {
                 real_time: Vec::new(),
                 color: color.clone(),
                 shape_ids,
-                operator: "TransGironde".to_string(),
+                operator,
             });
         }
 
@@ -1093,6 +1224,9 @@ impl NVTModels {
             trips,
             calendar,
             calendar_dates,
+            agencies: HashMap::new(),
+            route_agencies: HashMap::new(),
+            transfers: Vec::new(),
             cached_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1891,6 +2025,9 @@ impl NVTModels {
             trips,
             calendar,
             calendar_dates,
+            agencies: HashMap::new(),
+            route_agencies: HashMap::new(),
+            transfers: Vec::new(),
             cached_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1908,7 +2045,7 @@ impl NVTModels {
         Ok(cache)
     }
 
-    fn load_gtfs_data(source: &str, max_age_days: u64) -> Result<GTFSCache> {
+    fn load_gtfs_data(source: &str, _max_age_days: u64) -> Result<GTFSCache> {
         if source == "TBM" {
             Self::download_and_read_gtfs()
         } else {
