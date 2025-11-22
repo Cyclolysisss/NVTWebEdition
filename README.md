@@ -6,8 +6,10 @@ A real-time transit network visualization and API server for Bordeaux Métropole
 
 ### Real-Time Tracking
 - **Live Vehicle Positions**: Track buses, trams, and regional vehicles in real-time
+- **Vehicle Tracking**: Select and track individual vehicles with detailed stop information
 - **Auto-Refresh**: Network data automatically updates every 30 seconds
-- **Vehicle Information**: View detailed information including destination, delay, and line details
+- **Vehicle Information**: View detailed information including destination, delay, terminus, current stop, next stop, and previous stop
+- **SNCF Integration**: Real-time trip updates and service alerts from SNCF trains
 
 ### Interactive Map
 - **Dual-Operator Support**: Integrated display of both TBM and TransGironde networks
@@ -190,6 +192,22 @@ curl http://localhost:8080/api/tbm/alerts
 ```bash
 curl http://localhost:8080/api/tbm/stop/{stop_id}
 ```
+
+#### Get Stop Schedule
+
+```bash
+curl http://localhost:8080/api/tbm/stop/{stop_id}/schedule
+```
+
+Returns scheduled arrivals for the stop with deduplication.
+
+#### Get Vehicle Details
+
+```bash
+curl http://localhost:8080/api/tbm/vehicle/{vehicle_id}
+```
+
+Returns detailed information about a specific vehicle including its current terminus, current stop, next stop, and previous stop.
 
 #### Get Specific Line
 
@@ -579,7 +597,18 @@ Project Link: https://github.com/Cyclolysisss/NVTWebEdition
 
 ## 📅 Version History
 
-### Version 1.1.0 (Current)
+### Version 1.3.0 (Current)
+- **Vehicle Tracking Menu**: Track individual vehicles with detailed stop information
+- **SNCF Integration**: Added SNCF GTFS-RT trip updates and service alerts
+- **Improved Schedules**: Deduplication logic prevents duplicate arrivals
+- **New API Endpoints**: `/api/tbm/vehicle/{id}` and `/api/tbm/stop/{id}/schedule`
+- **Code Optimizations**: HTTP client helper, efficient deduplication with tuples
+
+### Version 1.2.0
+- Added SNCF static data support (routes, stops, shapes)
+- Enhanced line type classification for trains
+
+### Version 1.1.0
 - Integrated TransGironde regional transit network
 - Added dual-operator support throughout the application
 - Implemented transit route planner with multi-operator routing
