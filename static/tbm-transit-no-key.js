@@ -54,6 +54,11 @@ class TBMTransitMap {
         this.SECONDS_PER_HOUR = 3600;
         this.SECONDS_PER_MINUTE = 60;
 
+        // Mobile optimization constants
+        this.MOBILE_UPDATE_DELAY_MS = 1000;
+        this.DESKTOP_UPDATE_DELAY_MS = 500;
+        this.MOBILE_LARGE_DATASET_THRESHOLD = 10000;
+
         // Enhanced line type classification with regional operators and SNCF support
         this.lineTypes = {
             tram: {
@@ -159,7 +164,7 @@ class TBMTransitMap {
     isMobileDevice() {
         // Check for mobile user agents including iOS devices
         const ua = navigator.userAgent || navigator.vendor || window.opera;
-        return /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(ua) ||
+        return /android|webOS|iphone|ipad|ipod|blackberry|iemobile|opera mini|fennec/i.test(ua) ||
                (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
     }
 
@@ -331,7 +336,7 @@ class TBMTransitMap {
     setupViewportTracking() {
         // Reduce update frequency on mobile devices to prevent crashes
         const isMobile = this.isMobileDevice();
-        const updateDelay = isMobile ? 1000 : 500; // Longer delay on mobile
+        const updateDelay = isMobile ? this.MOBILE_UPDATE_DELAY_MS : this.DESKTOP_UPDATE_DELAY_MS;
         
         // Update visible data when map moves or zooms (with debounce)
         this.map.on('moveend', () => {
@@ -1753,7 +1758,7 @@ class TBMTransitMap {
 
             // Cache the complete dataset (with memory check for Safari iOS)
             const isMobile = this.isMobileDevice();
-            if (isMobile && fullData.stops.length > 10000) {
+            if (isMobile && fullData.stops.length > this.MOBILE_LARGE_DATASET_THRESHOLD) {
                 console.log('⚠️ Large dataset detected on mobile, reducing data...');
                 // On mobile with large datasets, we'll rely more on viewport filtering
                 this.BUFFER_DISTANCE_KM = 3; // Further reduce buffer
