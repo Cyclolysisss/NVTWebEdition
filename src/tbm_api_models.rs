@@ -816,15 +816,14 @@ impl NVTModels {
 
         for result in rdr.records() {
             if let Ok(record) = result {
-                // Only process stops (location_type = 1 means station, we want individual stops)
-                if let (Some(stop_id), Some(stop_name), Some(lat_str), Some(lon_str), Some(location_type)) =
-                    (record.get(0), record.get(2), record.get(5), record.get(6), record.get(9)) {
+                // GTFS stops.txt format: stop_id, stop_name, stop_lat, stop_lon, stop_code, stop_desc, location_type, ...
+                // Indices: 0=stop_id, 1=stop_name, 2=stop_lat, 3=stop_lon, 4=stop_code, 5=stop_desc, 6=location_type
+                if let (Some(stop_id), Some(stop_name), Some(lat_str), Some(lon_str)) =
+                    (record.get(0), record.get(1), record.get(2), record.get(3)) {
 
-                    // Skip parent stations (location_type = 1)
-                    if location_type == "1" {
-                        continue;
-                    }
-
+                    // Note: In the New-Aquitaine GTFS feed, location_type=1 (stations) are the primary stops
+                    // used for routing, not just parent groupings. We include all stops with valid coordinates.
+                    
                     if let (Ok(lat), Ok(lon)) = (lat_str.parse::<f64>(), lon_str.parse::<f64>()) {
                         if lat != 0.0 && lon != 0.0 {
                             stops_data.push((
@@ -1107,13 +1106,33 @@ impl NVTModels {
             }
         }
         
+        // Identify TBM routes by checking agency names
+        let mut tbm_route_ids = HashSet::new();
+        for (route_id, agency_id) in &cache.route_agencies {
+            if let Some(agency) = cache.agencies.get(agency_id) {
+                if agency.agency_name.contains("TBM") {
+                    tbm_route_ids.insert(route_id.clone());
+                }
+            }
+        }
+        
         let mut stops = Vec::new();
 
         // Create stops with properly populated lines arrays
         for (stop_id, stop_name, lat, lon) in &cache.stops {
-            let lines: Vec<String> = stop_to_routes.get(stop_id)
+            let routes: Vec<String> = stop_to_routes.get(stop_id)
                 .map(|set| set.iter().cloned().collect())
                 .unwrap_or_default();
+            
+            // Skip stops that are only served by TBM routes (already loaded from SIRI-Lite API)
+            if !routes.is_empty() && routes.iter().all(|r| tbm_route_ids.contains(r)) {
+                continue;
+            }
+            
+            // Filter out TBM routes from the lines array for stops served by multiple operators
+            let lines: Vec<String> = routes.into_iter()
+                .filter(|r| !tbm_route_ids.contains(r))
+                .collect();
             
             stops.push(Stop {
                 stop_id: stop_id.clone(),
@@ -1144,6 +1163,12 @@ impl NVTModels {
             } else {
                 "New-Aquitaine".to_string()
             };
+            
+            // Skip TBM lines as they are already loaded from the SIRI-Lite API with real-time data
+            // TBM is included in the New-Aquitaine aggregated GTFS feed, which would cause duplicates
+            if operator.contains("TBM") {
+                continue;
+            }
             
             // Extract route short name from route_id
             // Format: "CA_DU_LIBOURNAIS:Line:XXX" -> "XXX"
