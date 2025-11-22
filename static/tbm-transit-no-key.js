@@ -30,7 +30,7 @@ class TBMTransitMap {
 
         // Spatial filtering and caching for memory optimization
         this.fullNetworkData = null; // Complete dataset cached in memory
-        this.BUFFER_DISTANCE_KM = 10; // Load data within 10km of visible area
+        this.BUFFER_DISTANCE_KM = this.isMobileDevice() ? 5 : 10; // Reduced buffer on mobile for memory
         this.APPROX_KM_PER_DEGREE = 111; // Approximate kilometers per degree at equator
         this.VIEWPORT_UPDATE_DEBOUNCE_MS = 500; // Debounce time for viewport updates
         this.lastViewportBounds = null;
@@ -151,6 +151,17 @@ class TBMTransitMap {
     // ============================================================================
     // Spatial Filtering Functions for Memory Optimization
     // ============================================================================
+
+    /**
+     * Detect if running on mobile device (including Safari iOS)
+     * @returns {boolean} True if mobile device detected
+     */
+    isMobileDevice() {
+        // Check for mobile user agents including iOS devices
+        const ua = navigator.userAgent || navigator.vendor || window.opera;
+        return /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(ua) ||
+               (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
+    }
 
     /**
      * Calculate distance between two points using Haversine formula
@@ -315,9 +326,13 @@ class TBMTransitMap {
     }
 
     /**
-     * Setup viewport change listener for spatial filtering
+     * Setup viewport change listener for spatial filtering (Safari iOS safe)
      */
     setupViewportTracking() {
+        // Reduce update frequency on mobile devices to prevent crashes
+        const isMobile = this.isMobileDevice();
+        const updateDelay = isMobile ? 1000 : 500; // Longer delay on mobile
+        
         // Update visible data when map moves or zooms (with debounce)
         this.map.on('moveend', () => {
             if (this.viewportUpdateDebounce) {
@@ -325,34 +340,65 @@ class TBMTransitMap {
             }
             
             this.viewportUpdateDebounce = setTimeout(() => {
-                this.updateVisibleNetworkData();
-            }, this.VIEWPORT_UPDATE_DEBOUNCE_MS);
+                try {
+                    this.updateVisibleNetworkData();
+                } catch (e) {
+                    console.error('❌ Error updating viewport data:', e);
+                    // On error, try to recover by clearing some data
+                    if (isMobile) {
+                        console.log('🔄 Attempting memory recovery...');
+                        this.clearCachedData();
+                    }
+                }
+            }, updateDelay);
         });
         
-        console.log('✅ Viewport-based spatial filtering enabled (10km buffer)');
+        console.log(`✅ Viewport-based spatial filtering enabled (${this.BUFFER_DISTANCE_KM}km buffer, ${isMobile ? 'mobile' : 'desktop'} mode)`);
+    }
+    
+    /**
+     * Clear cached data to free memory (Safari iOS memory management)
+     */
+    clearCachedData() {
+        this.cachedStopGraph = null;
+        this.cachedLinesByType = null;
+        console.log('🧹 Cached data cleared for memory recovery');
     }
 
     // ============================================================================
     // End Spatial Filtering Functions
     // ============================================================================
 
-    // Save user preferences to localStorage
+    // Save user preferences to localStorage (Safari iOS safe)
     savePreferences() {
-        const prefs = {
-            showShapes: document.getElementById('showShapes')?.checked ?? true,
-            showVehicles: document.getElementById('showVehicles')?.checked ?? true,
-            showStops: document.getElementById('showStops')?.checked ?? true,
-            showAlerts: document.getElementById('showAlerts')?.checked ?? true,
-            showHeatmap: document.getElementById('showHeatmap')?.checked ?? false,
-        };
-        
-        localStorage.setItem('nvt_preferences', JSON.stringify(prefs));
-        console.log('💾 Preferences saved');
+        try {
+            const prefs = {
+                showShapes: document.getElementById('showShapes')?.checked ?? true,
+                showVehicles: document.getElementById('showVehicles')?.checked ?? true,
+                showStops: document.getElementById('showStops')?.checked ?? true,
+                showAlerts: document.getElementById('showAlerts')?.checked ?? true,
+                showHeatmap: document.getElementById('showHeatmap')?.checked ?? false,
+            };
+            
+            // Safari iOS sometimes throws on localStorage access in private mode
+            if (typeof localStorage !== 'undefined' && localStorage !== null) {
+                localStorage.setItem('nvt_preferences', JSON.stringify(prefs));
+                console.log('💾 Preferences saved');
+            }
+        } catch (e) {
+            console.warn('⚠️ localStorage not available:', e);
+        }
     }
 
-    // Load user preferences from localStorage
+    // Load user preferences from localStorage (Safari iOS safe)
     loadPreferences() {
         try {
+            // Check if localStorage is available (Safari iOS private mode blocks this)
+            if (typeof localStorage === 'undefined' || localStorage === null) {
+                console.warn('⚠️ localStorage not available');
+                return;
+            }
+            
             const saved = localStorage.getItem('nvt_preferences');
             if (!saved) return;
 
@@ -1705,7 +1751,14 @@ class TBMTransitMap {
                 throw new Error('Response missing stops or lines data');
             }
 
-            // Cache the complete dataset
+            // Cache the complete dataset (with memory check for Safari iOS)
+            const isMobile = this.isMobileDevice();
+            if (isMobile && fullData.stops.length > 10000) {
+                console.log('⚠️ Large dataset detected on mobile, reducing data...');
+                // On mobile with large datasets, we'll rely more on viewport filtering
+                this.BUFFER_DISTANCE_KM = 3; // Further reduce buffer
+            }
+            
             this.fullNetworkData = fullData;
 
             const operators = {};
