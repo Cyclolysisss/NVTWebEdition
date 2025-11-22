@@ -1122,11 +1122,21 @@ impl NVTModels {
             // Match by agency_id (most precise) or agency_name (fallback)
             let is_tbm = agency_id == "BORDEAUX_METROPOLE:Operator:TBM" || 
                          agency_id.contains(":Operator:TBM") ||
+                         agency_id.contains("BORDEAUX_METROPOLE") ||
                          cache.agencies.get(agency_id)
-                             .map(|a| a.agency_name == "TBM" || a.agency_name.starts_with("TBM ("))
+                             .map(|a| a.agency_name == "TBM" || 
+                                      a.agency_name.starts_with("TBM (") ||
+                                      a.agency_name.contains("Bordeaux Métropole"))
                              .unwrap_or(false);
             
             if is_tbm {
+                tbm_route_ids.insert(route_id.clone());
+            }
+        }
+        
+        // Also check for TBM by route_id patterns (fallback for routes without agency_id)
+        for route_id in cache.routes.keys() {
+            if route_id.contains("TBM:") || route_id.starts_with("BORDEAUX_METROPOLE:") {
                 tbm_route_ids.insert(route_id.clone());
             }
         }
@@ -1184,7 +1194,11 @@ impl NVTModels {
             // which would cause duplicates
             let is_tbm = operator == "TBM" || 
                          operator.starts_with("TBM (") ||
-                         agency_id.map(|id| id == "BORDEAUX_METROPOLE:Operator:TBM" || id.contains(":Operator:TBM"))
+                         operator.contains("Bordeaux Métropole") ||
+                         tbm_route_ids.contains(route_id) ||
+                         agency_id.map(|id| id == "BORDEAUX_METROPOLE:Operator:TBM" || 
+                                           id.contains(":Operator:TBM") ||
+                                           id.contains("BORDEAUX_METROPOLE"))
                              .unwrap_or(false);
             
             if is_tbm {
@@ -2388,8 +2402,15 @@ impl NVTModels {
                         route_id
                     };
                     
+                    // Use the actual route_id if it already contains "TBM:Line:", otherwise format it
+                    let line_ref = if route_id.contains("TBM:Line:") {
+                        route_id.clone()
+                    } else {
+                        format!("TBM:Line:{}", line_code)
+                    };
+                    
                     lines.push(Line {
-                        line_ref: format!("TBM:Line:{}", line_code),
+                        line_ref,
                         line_name: format!("Line {}", line_code),
                         line_code: line_code.to_string(),
                         route_id: route_id.clone(),
