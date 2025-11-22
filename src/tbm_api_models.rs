@@ -1987,9 +1987,14 @@ impl NVTModels {
 
         for result in rdr.records() {
             if let Ok(record) = result {
-                if let (Some(route_id), Some(route_color)) = (record.get(0), record.get(5)) {
-                    if !route_color.is_empty() && route_color.len() == 6 {
-                        color_map.insert(route_id.to_string(), route_color.to_string());
+                // GTFS routes.txt standard format:
+                // route_id,agency_id,route_short_name,route_long_name,route_desc,route_type,route_url,route_color,route_text_color
+                if let Some(route_id) = record.get(0) {
+                    // route_color is at index 7 in standard GTFS format
+                    if let Some(route_color) = record.get(7) {
+                        if !route_color.is_empty() && route_color.len() == 6 {
+                            color_map.insert(route_id.to_string(), route_color.to_string());
+                        }
                     }
                 }
             }
@@ -2293,12 +2298,18 @@ impl NVTModels {
             .as_secs() as i64;
         let cutoff_time = now - 120;
 
-        lines_data
+        // Track which route_ids are present in the SIRI-Lite API response
+        let mut active_route_ids = HashSet::new();
+
+        // Build lines from SIRI-Lite API data (active lines)
+        let mut lines: Vec<Line> = lines_data
             .into_iter()
             .map(|(line_ref_str, name, code, destinations)| {
                 let line_id_str = Self::extract_line_id(&line_ref_str)
                     .unwrap_or("")
                     .to_string();
+
+                active_route_ids.insert(line_id_str.clone());
 
                 let color = gtfs_cache.routes
                     .get(&line_id_str)
@@ -2352,7 +2363,38 @@ impl NVTModels {
                     operator: "TBM".to_string(),
                 }
             })
-            .collect()
+            .collect();
+
+        // Add inactive lines from GTFS that have shapes but aren't in SIRI-Lite
+        for (route_id, color) in &gtfs_cache.routes {
+            // Skip if already added from SIRI-Lite
+            if active_route_ids.contains(route_id) {
+                continue;
+            }
+
+            // Only add if the route has shapes (visual representation)
+            if let Some(shape_ids) = gtfs_cache.route_to_shapes.get(route_id) {
+                if !shape_ids.is_empty() {
+                    // Extract line code from route_id (format: "TBM:Line:CODE" -> "CODE")
+                    let line_code = route_id.split(':').last().unwrap_or(route_id);
+                    
+                    lines.push(Line {
+                        line_ref: format!("TBM:Line:{}", line_code),
+                        line_name: format!("Line {}", line_code),
+                        line_code: line_code.to_string(),
+                        route_id: route_id.clone(),
+                        destinations: Vec::new(),
+                        alerts: Vec::new(),
+                        real_time: Vec::new(),
+                        color: color.clone(),
+                        shape_ids: shape_ids.clone(),
+                        operator: "TBM".to_string(),
+                    });
+                }
+            }
+        }
+
+        lines
     }
 
     fn extract_stop_id(full_id: &str) -> Option<String> {
