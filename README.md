@@ -1,6 +1,6 @@
-# NVT Web Edition - TBM + TransGironde Transit Network Viewer
+# NVT Web Edition - New-Aquitaine Transit Network Viewer
 
-A real-time transit network visualization and API server for Bordeaux Métropole (TBM) and TransGironde regional transit systems. This application provides a comprehensive web interface for tracking vehicles, viewing routes, planning trips, and accessing transit data through a RESTful API.
+A real-time transit network visualization and API server for New-Aquitaine region networks including TBM (Bordeaux Métropole), SNCF trains, and all regional transit operators across New-Aquitaine. This application provides a comprehensive web interface for tracking vehicles, viewing routes, planning trips, and accessing transit data through a RESTful API.
 
 ## 🌟 Features
 
@@ -12,7 +12,7 @@ A real-time transit network visualization and API server for Bordeaux Métropole
 - **SNCF Integration**: Real-time trip updates and service alerts from SNCF trains
 
 ### Interactive Map
-- **Dual-Operator Support**: Integrated display of both TBM and TransGironde networks
+- **Multi-Operator Support**: Integrated display of TBM, all New-Aquitaine regional networks, and SNCF trains
 - **Line Shapes**: Visualize complete route geometries on the map
 - **Stop Information**: View all stops with real-time arrival predictions
 - **Alerts & Disruptions**: See active service alerts and disruptions
@@ -21,14 +21,14 @@ A real-time transit network visualization and API server for Bordeaux Métropole
 
 ### Trip Planning
 - **Transit Route Planner**: Calculate optimal routes between any two stops
-- **Multi-Operator Routing**: Routes can use both TBM and TransGironde lines
-- **Transfer Information**: Clear display of required transfers
+- **Multi-Operator Routing**: Routes can use lines from TBM, regional networks, and SNCF
+- **Transfer Information**: Clear display of required transfers with minimum transfer times
 - **Real-Time Arrival Predictions**: See next vehicle arrivals at each stop
 
 ### Network Organization
 - **Line Grouping**: Lines organized by type (Tram, BRT, Bus, Regional, School, Night, Ferry)
 - **Search & Filter**: Quickly find stops and lines
-- **Operator Badges**: Clear identification of TBM vs. TransGironde services
+- **Operator Badges**: Clear identification of services by operator (TBM, Calibus, YELO, Tanlib, STCLM, etc.)
 
 ### RESTful API
 - **Comprehensive Endpoints**: Access all network data programmatically
@@ -100,7 +100,7 @@ Or if using a pre-built binary:
 ### First Launch
 
 On first launch, the server will:
-1. Download GTFS data for both TBM and TransGironde
+1. Download GTFS data for TBM, New-Aquitaine regional networks, and SNCF
 2. Cache the data locally (expires after 15-30 days depending on operator)
 3. Fetch real-time vehicle positions and alerts
 4. Start the web server on port 8080
@@ -229,7 +229,9 @@ curl http://localhost:8080/api/tbm/operator/{operator_name}
 Examples:
 ```bash
 curl http://localhost:8080/api/tbm/operator/TBM
-curl http://localhost:8080/api/tbm/operator/TransGironde
+curl "http://localhost:8080/api/tbm/operator/YELO"
+curl "http://localhost:8080/api/tbm/operator/Calibus (Libourne)"
+curl "http://localhost:8080/api/tbm/operator/STCLM (Limoges Métropole)"
 ```
 
 #### Get All Operators
@@ -266,7 +268,7 @@ All API responses follow this format:
   "data": { /* response data */ },
   "error": null,
   "timestamp": 1700123456,
-  "sources": ["TBM", "TransGironde"]
+  "sources": ["TBM", "NewAquitaine", "SNCF"]
 }
 ```
 
@@ -303,13 +305,15 @@ let mut interval = time::interval(Duration::from_secs(30));
 ### Cache Expiration
 
 - **TBM GTFS Data**: Expires after 15 days
-- **TransGironde GTFS Data**: Expires after 30 days
+- **New-Aquitaine GTFS Data**: Expires after 30 days
+- **SNCF GTFS Data**: Expires after 30 days
 
 To modify, change the values in `src/tbm_api_models.rs`:
 
 ```rust
 if let Some(cache) = GTFSCache::load("TBM", 15) {  // days
-if let Some(cache) = GTFSCache::load("TransGironde", 30) {  // days
+if let Some(cache) = GTFSCache::load("NewAquitaine", 30) {  // days
+if let Some(cache) = GTFSCache::load("SNCF", 30) {  // days
 ```
 
 ### Mapbox Token
@@ -336,12 +340,37 @@ Get a free token at [mapbox.com](https://www.mapbox.com/).
 - GTFS-RT Trip Updates: https://bdx.mecatran.com/utw/ws/gtfsfeed/realtime/bordeaux
 - GTFS Static: https://transport.data.gouv.fr/resources/83024/download
 
-### TransGironde
+### New-Aquitaine Regional Networks
 
-**Official Website**: https://www.transgironde.fr/
+**Official Website**: https://www.nouvelle-aquitaine.fr/
 
 **Data Source**:
-- GTFS Static: https://www.pigma.org/public/opendata/nouvelle_aquitaine_mobilites/publication/gironde-aggregated-gtfs.zip
+- GTFS Static (Aggregated): https://www.pigma.org/public/opendata/nouvelle_aquitaine_mobilites/publication/naq-aggregated-gtfs.zip
+
+**Included Operators** (50+ transit networks):
+- **TBM** (Bordeaux Métropole)
+- **Calibus** (Libourne)
+- **YELO** (La Rochelle)
+- **Tanlib** (Niort)
+- **STCLM** (Limoges Métropole)
+- **VITALIS** (Grand Poitiers)
+- **Evalys** (Val de Garonne)
+- **Périmouv** (Grand Perigueux)
+- **IDELIS** (Pau)
+- **TMA** (Mont de Marsan)
+- **Mobius** (Grand Angoulême)
+- **BUSS** (Saintes)
+- **Carabus** (Royan Atlantique)
+- And 40+ more regional and departmental transit operators across New-Aquitaine
+
+### SNCF (French National Railways)
+
+**Official Website**: https://www.sncf.com/
+
+**Data Sources**:
+- GTFS Static: https://eu.ftp.opendatasoft.com/sncf/plandata/Export_OpenData_SNCF_GTFS_NewTripId.zip
+- GTFS-RT Trip Updates: https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-trip-updates
+- GTFS-RT Service Alerts: https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-service-alerts
 
 ## 🏗️ Architecture
 
@@ -364,9 +393,11 @@ Get a free token at [mapbox.com](https://www.mapbox.com/).
 #### API Models (`src/tbm_api_models.rs`)
 - GTFS and GTFS-RT data parsing
 - Network data caching system
-- TBM and TransGironde data integration
+- Multi-operator data integration (TBM, New-Aquitaine networks, SNCF)
+- Agency-based operator identification
 - Real-time feed processing
 - Shape geometry handling
+- Transfer rules support
 
 #### Frontend (`static/nvtweb.html`)
 - Responsive HTML interface
@@ -402,8 +433,8 @@ Get a free token at [mapbox.com](https://www.mapbox.com/).
 
 **GTFS Static Data**:
 - Stored in `~/.cache/tbm_nvt/` (Linux/Mac) or equivalent
-- Files: `tbm_gtfs_cache.json`, `transgironde_gtfs_cache.json`
-- Contains: routes, stops, shapes, route-to-shape mappings
+- Files: `tbm_gtfs_cache.json`, `newaquitaine_gtfs_cache.json`, `sncf_gtfs_cache.json`
+- Contains: routes, stops, shapes, route-to-shape mappings, agencies, transfers
 - Automatically refreshed when expired
 
 **Real-Time Data**:
@@ -590,14 +621,22 @@ Project Link: https://github.com/Cyclolysisss/NVTWebEdition
 ## 🙏 Acknowledgments
 
 - **TBM (Transports Bordeaux Métropole)** for providing open transit data
-- **TransGironde** for regional transit information
+- **Région Nouvelle-Aquitaine** for aggregated regional transit data covering 50+ operators
+- **SNCF** for national railway data and real-time updates
 - **Mapbox** for mapping services
 - **Actix-Web** for the robust web framework
 - The Rust community for excellent tools and libraries
 
 ## 📅 Version History
 
-### Version 1.3.0 (Current)
+### Version 1.4.0 (Current)
+- **New-Aquitaine Integration**: Replaced regional GTFS with comprehensive aggregated feed
+- **50+ Transit Operators**: Now supporting all New-Aquitaine transit networks
+- **Agency-Based Identification**: Automatic operator detection from GTFS agency data
+- **Transfer Rules Support**: Added support for GTFS transfers.txt for better trip planning
+- **Enhanced Data Model**: Extended cache structure to include agencies and route-to-agency mappings
+
+### Version 1.3.0
 - **Vehicle Tracking Menu**: Track individual vehicles with detailed stop information
 - **SNCF Integration**: Added SNCF GTFS-RT trip updates and service alerts
 - **Improved Schedules**: Deduplication logic prevents duplicate arrivals
@@ -644,4 +683,4 @@ For issues, questions, or suggestions:
 
 ---
 
-**Built with ❤️ in Rust** | **Transit Data Powered by TBM & TransGironde**
+**Built with ❤️ in Rust** | **Transit Data Powered by TBM, Région Nouvelle-Aquitaine & SNCF**
